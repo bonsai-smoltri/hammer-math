@@ -391,6 +391,149 @@ export function calculateAttack(
   }
 }
 
+// --- Expected Wounds Estimation ---
+
+/**
+ * Estimate the expected number of unsaved wounds that get through.
+ * Uses average values for variable dice expressions.
+ */
+export function estimateWounds(
+  attacker: ParsedUnit,
+  weapon: ParsedWeapon,
+  defender: ParsedUnit,
+  options: CombatOptions
+): number {
+  const ctx: AttackContext = { attacker, weapon, defender, options }
+
+  // Build state through pipeline
+  const numericAttacks = parseInt(weapon.attacks)
+  let state: AttackState = {
+    attacksPerModel: isNaN(numericAttacks) ? null : numericAttacks,
+    attacksExpression: weapon.attacks,
+    bonusAttacksPerModel: 0,
+    blastBonus: 0,
+    hitThreshold: weapon.skill,
+    hitModifiers: [],
+    autoHit: false,
+    critHitEffects: [],
+    overrideHitMinimum: null,
+    hitOverrideNote: null,
+    cannotRerollHits: false,
+    woundThreshold: getWoundThreshold(weapon.strength, defender.toughness),
+    woundModifiers: [],
+    critWoundThreshold: 6,
+    critWoundEffects: [],
+    rerollWounds: false,
+    apValue: weapon.ap,
+    ignoreCover: false,
+    damageExpression: weapon.damage,
+    bonusDamage: 0,
+    bonusDamageNote: null,
+    notes: [],
+  }
+
+  for (const modifier of MODIFIERS) {
+    if (modifier.isActive(ctx)) {
+      state = modifier.apply(state, ctx)
+    }
+  }
+
+  state.hitThreshold = Math.max(2, Math.min(6, state.hitThreshold))
+
+  // Calculate number of attacks
+  const attacksPerModel = state.attacksPerModel ?? averageDiceExpression(state.attacksExpression)
+  const totalAttacks = (attacksPerModel + state.bonusAttacksPerModel + state.blastBonus) * attacker.modelCount
+
+  // Hit probability
+  const effectiveHitThreshold = state.overrideHitMinimum ?? state.hitThreshold
+  const hitProb = state.autoHit ? 1 : (7 - effectiveHitThreshold) / 6
+
+  // Sustained hits bonus (extra hits on crit)
+  const sustainedHits = getSustainedHitsValue(state)
+  const critHitProb = 1 / 6
+  const extraHitsPerAttack = sustainedHits > 0 ? critHitProb * sustainedHits : 0
+
+  // Lethal hits: crits skip wound roll
+  const hasLethal = state.critHitEffects.some(e => e.toLowerCase().includes('lethal'))
+
+  let hitsToWound: number
+  let autoWounds: number
+
+  if (hasLethal) {
+    // Non-crit hits go through wound roll, crit hits auto-wound
+    const normalHitProb = hitProb - critHitProb
+    hitsToWound = totalAttacks * Math.max(0, normalHitProb) + totalAttacks * extraHitsPerAttack
+    autoWounds = totalAttacks * critHitProb
+  } else {
+    hitsToWound = totalAttacks * (hitProb + extraHitsPerAttack)
+    autoWounds = 0
+  }
+
+  // Wound probability
+  const woundProb = (7 - state.woundThreshold) / 6
+  // Twin-linked rerolls failed wounds
+  const effectiveWoundProb = state.rerollWounds
+    ? woundProb + (1 - woundProb) * woundProb
+    : woundProb
+
+  const woundsFromRolls = hitsToWound * effectiveWoundProb
+  const totalWoundsBeforeSave = woundsFromRolls + autoWounds
+
+  // Save probability
+  const modifiedSave = defender.save + state.apValue
+  const invuln = defender.invulnerableSave
+  let effectiveSave: number
+
+  if (invuln !== null) {
+    effectiveSave = Math.min(modifiedSave, invuln)
+  } else {
+    effectiveSave = modifiedSave
+  }
+
+  const saveProb = effectiveSave <= 6 ? (7 - effectiveSave) / 6 : 0
+  const unsavedWounds = totalWoundsBeforeSave * (1 - saveProb)
+
+  // Feel No Pain
+  const fnp = defender.feelNoPain
+  const fnpProb = fnp ? (7 - fnp) / 6 : 0
+  const woundsAfterFnp = unsavedWounds * (1 - fnpProb)
+
+  // Damage per wound
+  const damageNum = parseInt(state.damageExpression)
+  const damagePerWound = (isNaN(damageNum) ? averageDiceExpression(state.damageExpression) : damageNum) + state.bonusDamage
+
+  return woundsAfterFnp * damagePerWound
+}
+
+/** Parse average value from dice expressions like "D6", "D3", "2D6", "D6+1" */
+function averageDiceExpression(expr: string): number {
+  const cleaned = expr.trim().toUpperCase()
+
+  // Match patterns like "2D6+1", "D3", "D6"
+  const match = cleaned.match(/^(\d*)D(\d+)([+-]\d+)?$/)
+  if (match) {
+    const count = match[1] ? parseInt(match[1]) : 1
+    const sides = parseInt(match[2])
+    const modifier = match[3] ? parseInt(match[3]) : 0
+    return count * ((sides + 1) / 2) + modifier
+  }
+
+  // Plain number
+  const num = parseInt(cleaned)
+  if (!isNaN(num)) return num
+
+  return 1 // fallback
+}
+
+/** Extract sustained hits value from crit effects */
+function getSustainedHitsValue(state: AttackState): number {
+  for (const effect of state.critHitEffects) {
+    const match = effect.match(/sustained hits? (\d+)/i)
+    if (match) return parseInt(match[1])
+  }
+  return 0
+}
+
 // --- Helpers ---
 
 function formatDiceCount(models: number, state: AttackState): string {

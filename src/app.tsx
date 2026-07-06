@@ -6,9 +6,14 @@ import { WeaponSelector } from './components/WeaponSelector'
 import { AttackSummary } from './components/AttackSummary'
 import { DefenderStats } from './components/DefenderStats'
 import { ModelCounter } from './components/ModelCounter'
+import { WoundInput } from './components/WoundInput'
 import { parseRoster } from './lib/roster-parser'
 import { saveRoster, loadRoster, clearRosters } from './lib/storage'
+import { createBattleState, advancePhase, applyAttack } from './lib/battle-state'
+import { estimateWounds } from './lib/combat-math'
 import type { ParsedRoster, ParsedUnit, ParsedWeapon } from './types/roster'
+import type { BattleState } from './types/battle'
+import type { DamageResult } from './lib/battle-state'
 
 export function App() {
   const [armyA, setArmyA] = useState<ParsedRoster | null>(null)
@@ -18,6 +23,7 @@ export function App() {
   const [selectedWeapon, setSelectedWeapon] = useState<ParsedWeapon | null>(null)
   const [picking, setPicking] = useState<'attacker' | 'defender' | null>(null)
   const [activeModels, setActiveModels] = useState<number | null>(null)
+  const [battleState, setBattleState] = useState<BattleState | null>(null)
 
   // Load rosters from localStorage on mount
   useEffect(() => {
@@ -26,6 +32,13 @@ export function App() {
     if (storedA) setArmyA(storedA)
     if (storedB) setArmyB(storedB)
   }, [])
+
+  // Initialize battle state when both rosters are loaded
+  useEffect(() => {
+    if (armyA && armyB && !battleState) {
+      setBattleState(createBattleState(armyA, armyB))
+    }
+  }, [armyA, armyB])
 
   const handleRosterUpload = (file: File, army: 'A' | 'B') => {
     const reader = new FileReader()
@@ -43,6 +56,8 @@ export function App() {
           setArmyB(parsed)
           setDefendingUnit(null)
         }
+        // Reset battle state when rosters change
+        setBattleState(null)
       } catch (err) {
         console.error('Failed to parse roster:', err)
       }
@@ -58,6 +73,7 @@ export function App() {
     setDefendingUnit(null)
     setSelectedWeapon(null)
     setActiveModels(null)
+    setBattleState(null)
   }
 
   const handleSwap = () => {
@@ -76,12 +92,64 @@ export function App() {
     if (prevA) saveRoster('B', prevA)
   }
 
+  const handleAdvancePhase = () => {
+    if (battleState) {
+      setBattleState(advancePhase(battleState))
+    }
+  }
+
+  const handleAttackConfirm = (woundsDealt: number, damageResult: DamageResult) => {
+    if (!battleState || !attackingUnit || !defendingUnit || !selectedWeapon) return
+
+    const newState = applyAttack(
+      battleState,
+      attackingUnit.id,
+      attackingUnit.name,
+      selectedWeapon.name,
+      defendingUnit.id,
+      defendingUnit.name,
+      woundsDealt,
+      damageResult
+    )
+    setBattleState(newState)
+  }
+
   const bothLoaded = armyA !== null && armyB !== null
 
   // Build the effective attacker with adjusted model count
   const effectiveAttacker = attackingUnit && activeModels !== null
     ? { ...attackingUnit, modelCount: activeModels }
     : attackingUnit
+
+  // Get defender wound state for WoundInput
+  const defenderWoundState = battleState && defendingUnit
+    ? battleState.unitWounds[defendingUnit.id] ?? null
+    : null
+
+  // Calculate recommended target (highest estimated wounds from current weapon)
+  const recommendedTargetId = (() => {
+    if (!effectiveAttacker || !selectedWeapon || !armyB || !battleState) return null
+    let bestId: string | null = null
+    let bestWounds = 0
+    const defaultOptions = {
+      inHalfRange: false,
+      remainedStationary: false,
+      targetInCover: false,
+      advanced: false,
+      charged: false,
+      indirectFiring: false,
+      spotterAvailable: false,
+    }
+    for (const unit of armyB.units) {
+      if (battleState.unitWounds[unit.id]?.isDead) continue
+      const est = estimateWounds(effectiveAttacker, selectedWeapon, unit, defaultOptions)
+      if (est > bestWounds) {
+        bestWounds = est
+        bestId = unit.id
+      }
+    }
+    return bestId
+  })()
 
   return (
     <div class="min-h-screen bg-base-100 text-base-content flex flex-col max-w-lg mx-auto">
@@ -96,6 +164,21 @@ export function App() {
       {/* Combat view */}
       {bothLoaded && (
         <>
+          {/* Round/Phase indicator */}
+          {battleState && (
+            <div class="flex items-center justify-between px-4 py-2 bg-base-200 border-b border-base-content/10">
+              <div class="text-sm font-medium">
+                Round {battleState.currentRound} — <span class="capitalize">{battleState.currentPhase}</span> Phase
+              </div>
+              <button
+                class="btn btn-ghost btn-xs"
+                onClick={handleAdvancePhase}
+              >
+                Next Phase →
+              </button>
+            </div>
+          )}
+
           {/* Top bar: Attacker | Swap | Defender | Menu */}
           <div class="flex items-center border-b border-base-content/10">
             <button
@@ -150,6 +233,7 @@ export function App() {
                 setActiveModels(unit.modelCount)
                 setPicking(null)
               }}
+              unitWounds={battleState?.unitWounds}
             />
           )}
           {picking === 'defender' && (
@@ -159,6 +243,8 @@ export function App() {
                 setDefendingUnit(unit)
                 setPicking(null)
               }}
+              unitWounds={battleState?.unitWounds}
+              recommendedUnitId={recommendedTargetId}
             />
           )}
 
@@ -195,6 +281,23 @@ export function App() {
                   weapon={selectedWeapon}
                   defender={defendingUnit}
                 />
+              )}
+
+              {/* Wound input + Attack button */}
+              {selectedWeapon && defendingUnit && effectiveAttacker && defenderWoundState && !defenderWoundState.isDead && (
+                <WoundInput
+                  weapon={selectedWeapon}
+                  defenderWoundState={defenderWoundState}
+                  onConfirm={handleAttackConfirm}
+                />
+              )}
+
+              {/* Dead defender notice */}
+              {defenderWoundState?.isDead && (
+                <div class="card bg-base-200 p-4 text-center">
+                  <span class="text-2xl">💀</span>
+                  <p class="font-bold text-error mt-1">Unit Destroyed</p>
+                </div>
               )}
 
               {!attackingUnit && !defendingUnit && (

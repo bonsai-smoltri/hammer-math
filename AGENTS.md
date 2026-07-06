@@ -16,12 +16,15 @@ Warhammer 40k Combat Math — a mobile-first PWA that calculates attack outcomes
 
 ```
 src/
-├── app.tsx              # Root component, manages combat state (attacker/defender/weapon selection)
+├── app.tsx              # Root component, manages combat + battle state
 ├── main.tsx             # Entry point, renders App
 ├── index.css            # Tailwind import
-├── types/roster.ts      # TypeScript interfaces (ParsedWeapon, ParsedUnit, ParsedRoster)
+├── types/
+│   ├── roster.ts        # TypeScript interfaces (ParsedWeapon, ParsedUnit, ParsedRoster)
+│   └── battle.ts        # Battle tracking types (BattleState, UnitWoundState, AttackAction, etc.)
 ├── lib/
 │   ├── combat-math.ts   # Core calculation engine — modifier pipeline pattern
+│   ├── battle-state.ts  # Battle state management (round/phase tracking, damage calculation, attack logging)
 │   ├── roster-parser.ts # Parses BattleScribe JSON export into typed roster data
 │   └── storage.ts       # localStorage helpers for roster persistence
 └── components/
@@ -30,8 +33,9 @@ src/
     ├── DefenderStats.tsx # Shows defender's defensive profile
     ├── ModelCounter.tsx  # Adjusts active model count for attacker
     ├── RosterUpload.tsx  # File upload UI for BattleScribe JSON
-    ├── UnitPicker.tsx    # Unit selection dropdown
-    └── WeaponSelector.tsx # Weapon selection for the attacking unit
+    ├── UnitPicker.tsx    # Unit selection dropdown (shows skull for dead units)
+    ├── WeaponSelector.tsx # Weapon selection for the attacking unit
+    └── WoundInput.tsx   # Wound input + model removal recommendations + attack confirmation
 ```
 
 ## Key Design Decisions

@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks'
 import type { ParsedUnit, ParsedWeapon } from '../types/roster'
-import { calculateAttack, type CombatOptions } from '../lib/combat-math'
+import { calculateAttack, estimateWounds, type CombatOptions } from '../lib/combat-math'
 
 interface Props {
   attacker: ParsedUnit
@@ -20,6 +20,7 @@ export function AttackSummary({ attacker, weapon, defender }: Props) {
   })
 
   const result = calculateAttack(attacker, weapon, defender, options)
+  const estimated = estimateWounds(attacker, weapon, defender, options)
 
   // Determine which toggles to show
   const hasRapidFire = hasKw(weapon, 'Rapid Fire')
@@ -125,6 +126,10 @@ export function AttackSummary({ attacker, weapon, defender }: Props) {
           {result.feelNoPainDisplay && (
             <SummaryLine icon="❤️‍🩹" text={result.feelNoPainDisplay} />
           )}
+
+          <div class="border-t border-base-content/10 pt-2 mt-2">
+            <SummaryLine icon="📊" text={`~${estimated.toFixed(1)} estimated wounds`} />
+          </div>
 
           {result.notes.length > 0 && (
             <div class="border-t border-base-content/10 pt-2 mt-2">
