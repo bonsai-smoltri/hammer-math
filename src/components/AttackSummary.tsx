@@ -62,6 +62,7 @@ export function AttackSummary({ attacker, weapon, defender }: Props) {
               onClick={() => setOptions({ ...options, advanced: !options.advanced })}
             />
           )}
+          
           {hasLance && (
             <OptionButton
               label="Lance"
@@ -69,6 +70,7 @@ export function AttackSummary({ attacker, weapon, defender }: Props) {
               onClick={() => setOptions({ ...options, charged: !options.charged })}
             />
           )}
+
           {isRanged && (
             <OptionButton
               label="Cover"
@@ -77,6 +79,7 @@ export function AttackSummary({ attacker, weapon, defender }: Props) {
               variant="warning"
             />
           )}
+
           {hasIndirect && (
             <OptionButton
               label="Indirect"
