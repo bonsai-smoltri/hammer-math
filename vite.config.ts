@@ -34,5 +34,5 @@ export default defineConfig({
       },
     }),
   ],
-  base: '/warhammer-math/',
+  base: '/hammer-math/',
 })
