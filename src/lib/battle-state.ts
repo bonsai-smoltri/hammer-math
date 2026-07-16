@@ -3,9 +3,12 @@ import type {
   BattleState,
   BattleRound,
   AttackAction,
+  HealAction,
   UnitWoundState,
   CombatPhase,
 } from '../types/battle'
+
+export const MAX_ROUNDS = 5
 
 /** Create initial battle state from two rosters */
 export function createBattleState(armyA: ParsedRoster, armyB: ParsedRoster): BattleState {
@@ -24,25 +27,67 @@ export function createBattleState(armyA: ParsedRoster, armyB: ParsedRoster): Bat
   return {
     currentRound: 1,
     currentPhase: 'shooting',
+    currentTurn: 'attacker',
     rounds: [{ number: 1, actions: [] }],
     unitWounds,
+    battleComplete: false,
   }
 }
 
-/** Advance to the next phase or round */
+/**
+ * Advance to the next phase/turn/round.
+ *
+ * Progression: attacker shooting → attacker fight → defender shooting → defender fight → next round
+ * After 5 rounds, battle is complete.
+ */
 export function advancePhase(state: BattleState): BattleState {
+  if (state.battleComplete) return state
+
+  // shooting → fight (same turn)
   if (state.currentPhase === 'shooting') {
     return { ...state, currentPhase: 'fight' as CombatPhase }
   }
 
-  // After fight phase, advance to next round
+  // fight phase complete — check whose turn it was
+  if (state.currentTurn === 'attacker') {
+    // Attacker done → switch to defender's turn (shooting)
+    return {
+      ...state,
+      currentPhase: 'shooting' as CombatPhase,
+      currentTurn: 'defender',
+    }
+  }
+
+  // Defender's fight phase done → advance to next round
   const nextRound = state.currentRound + 1
+
+  if (nextRound > MAX_ROUNDS) {
+    return { ...state, battleComplete: true }
+  }
+
   const newRound: BattleRound = { number: nextRound, actions: [] }
   return {
     ...state,
     currentRound: nextRound,
     currentPhase: 'shooting' as CombatPhase,
+    currentTurn: 'attacker',
     rounds: [...state.rounds, newRound],
+  }
+}
+
+/** Jump back to a previous phase/turn/round */
+export function jumpToPhase(
+  state: BattleState,
+  round: number,
+  turn: 'attacker' | 'defender',
+  phase: CombatPhase
+): BattleState {
+  return {
+    ...state,
+    currentRound: round,
+    currentTurn: turn,
+    currentPhase: phase,
+    battleComplete: false,
   }
 }
 
@@ -155,8 +200,12 @@ export function applyAttack(
   woundsDealt: number,
   damageResult: DamageResult
 ): BattleState {
+  const defenderState = state.unitWounds[defenderUnitId]
   const action: AttackAction = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: 'attack',
+    round: state.currentRound,
+    turn: state.currentTurn,
     phase: state.currentPhase,
     attackerUnitId,
     attackerUnitName,
@@ -165,6 +214,9 @@ export function applyAttack(
     defenderUnitName,
     woundsDealt,
     modelsRemoved: damageResult.modelsRemoved,
+    defenderModelsRemaining: damageResult.newWoundsRemaining.length,
+    defenderWoundsRemaining: damageResult.newWoundsRemaining.reduce((s, w) => s + w, 0),
+    defenderWoundsPerModel: defenderState.woundsPerModel,
     timestamp: Date.now(),
   }
 
@@ -184,6 +236,77 @@ export function applyAttack(
     ...unitWounds[defenderUnitId],
     woundsRemaining: damageResult.newWoundsRemaining,
     isDead: damageResult.unitDestroyed,
+  }
+
+  return { ...state, rounds, unitWounds }
+}
+
+/** Apply a heal/restore to the battle state, recording the action */
+export function applyHeal(
+  state: BattleState,
+  unitId: string,
+  unitName: string,
+  woundsRestored: number,
+  originalModelCount: number,
+  woundsPerModel: number
+): BattleState {
+  // Update unit wound state first to calculate actual models restored
+  const current = state.unitWounds[unitId]
+  const newWounds = [...current.woundsRemaining]
+  let remaining = woundsRestored
+  let modelsRestored = 0
+
+  // Step 1: Heal the wounded model to full
+  for (let i = 0; i < newWounds.length && remaining > 0; i++) {
+    if (newWounds[i] < woundsPerModel) {
+      const canHeal = Math.min(woundsPerModel - newWounds[i], remaining)
+      newWounds[i] += canHeal
+      remaining -= canHeal
+    }
+  }
+
+  // Step 2: Restore dead models with remaining wounds
+  while (remaining >= woundsPerModel && newWounds.length < originalModelCount) {
+    newWounds.push(woundsPerModel)
+    remaining -= woundsPerModel
+    modelsRestored++
+  }
+
+  // Step 3: If there are leftover wounds and room for a model, add a partial model
+  if (remaining > 0 && newWounds.length < originalModelCount) {
+    newWounds.push(remaining)
+    modelsRestored++
+    remaining = 0
+  }
+
+  const action: HealAction = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: 'heal',
+    round: state.currentRound,
+    turn: state.currentTurn,
+    phase: state.currentPhase,
+    unitId,
+    unitName,
+    modelsRestored,
+    woundsRestored,
+    timestamp: Date.now(),
+  }
+
+  // Update the current round's actions
+  const rounds = [...state.rounds]
+  const currentRoundIdx = rounds.findIndex(r => r.number === state.currentRound)
+  if (currentRoundIdx !== -1) {
+    rounds[currentRoundIdx] = {
+      ...rounds[currentRoundIdx],
+      actions: [...rounds[currentRoundIdx].actions, action],
+    }
+  }
+
+  const unitWounds = { ...state.unitWounds }
+  unitWounds[unitId] = {
+    ...current,
+    woundsRemaining: newWounds,
+    isDead: newWounds.length === 0,
   }
 
   return { ...state, rounds, unitWounds }

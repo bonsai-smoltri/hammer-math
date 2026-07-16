@@ -5,11 +5,13 @@ import { UnitPicker } from './components/UnitPicker'
 import { WeaponSelector } from './components/WeaponSelector'
 import { AttackSummary } from './components/AttackSummary'
 import { DefenderStats } from './components/DefenderStats'
-import { ModelCounter } from './components/ModelCounter'
+import { HealUnit } from './components/HealUnit'
+import { PhaseNavigator } from './components/PhaseNavigator'
+import { BattleSummary } from './components/BattleSummary'
 import { WoundInput } from './components/WoundInput'
 import { parseRoster } from './lib/roster-parser'
 import { saveRoster, loadRoster, clearRosters } from './lib/storage'
-import { createBattleState, advancePhase, applyAttack } from './lib/battle-state'
+import { createBattleState, advancePhase, jumpToPhase, applyAttack, applyHeal } from './lib/battle-state'
 import { estimateWounds } from './lib/combat-math'
 import type { ParsedRoster, ParsedUnit, ParsedWeapon } from './types/roster'
 import type { BattleState } from './types/battle'
@@ -22,8 +24,9 @@ export function App() {
   const [defendingUnit, setDefendingUnit] = useState<ParsedUnit | null>(null)
   const [selectedWeapon, setSelectedWeapon] = useState<ParsedWeapon | null>(null)
   const [picking, setPicking] = useState<'attacker' | 'defender' | null>(null)
-  const [activeModels, setActiveModels] = useState<number | null>(null)
   const [battleState, setBattleState] = useState<BattleState | null>(null)
+  const [swapped, setSwapped] = useState(false)
+  const [showSummary, setShowSummary] = useState(false)
 
   // Load rosters from localStorage on mount
   useEffect(() => {
@@ -51,7 +54,6 @@ export function App() {
           setArmyA(parsed)
           setAttackingUnit(null)
           setSelectedWeapon(null)
-          setActiveModels(null)
         } else {
           setArmyB(parsed)
           setDefendingUnit(null)
@@ -72,31 +74,38 @@ export function App() {
     setAttackingUnit(null)
     setDefendingUnit(null)
     setSelectedWeapon(null)
-    setActiveModels(null)
     setBattleState(null)
   }
 
   const handleSwap = () => {
-    const prevAttacker = attackingUnit
-    const prevDefender = defendingUnit
-    setAttackingUnit(prevDefender)
-    setDefendingUnit(prevAttacker)
+    setSwapped(!swapped)
+    setAttackingUnit(null)
+    setDefendingUnit(null)
     setSelectedWeapon(null)
-    setActiveModels(prevDefender ? prevDefender.modelCount : null)
-    // Swap which roster is which
-    const prevA = armyA
-    const prevB = armyB
-    setArmyA(prevB)
-    setArmyB(prevA)
-    if (prevB) saveRoster('A', prevB)
-    if (prevA) saveRoster('B', prevA)
   }
 
   const handleAdvancePhase = () => {
     if (battleState) {
-      setBattleState(advancePhase(battleState))
+      const newState = advancePhase(battleState)
+      setBattleState(newState)
+      // Clear unit/weapon selections when turn changes
+      if (newState.currentTurn !== battleState.currentTurn || newState.currentRound !== battleState.currentRound) {
+        setAttackingUnit(null)
+        setDefendingUnit(null)
+        setSelectedWeapon(null)
+      }
+      setSwapped(false)
+      if (newState.battleComplete) {
+        setShowSummary(true)
+      }
     }
   }
+
+  // Determine which roster is attacking/defending based on current turn and swap toggle
+  const isDefenderTurn = battleState?.currentTurn === 'defender'
+  const flipped = swapped ? !isDefenderTurn : isDefenderTurn
+  const attackingRoster = flipped ? armyB : armyA
+  const defendingRoster = flipped ? armyA : armyB
 
   const handleAttackConfirm = (woundsDealt: number, damageResult: DamageResult) => {
     if (!battleState || !attackingUnit || !defendingUnit || !selectedWeapon) return
@@ -116,9 +125,14 @@ export function App() {
 
   const bothLoaded = armyA !== null && armyB !== null
 
-  // Build the effective attacker with adjusted model count
-  const effectiveAttacker = attackingUnit && activeModels !== null
-    ? { ...attackingUnit, modelCount: activeModels }
+  // Get attacker wound state for HealUnit and model count
+  const attackerWoundState = battleState && attackingUnit
+    ? battleState.unitWounds[attackingUnit.id] ?? null
+    : null
+
+  // Build the effective attacker with model count from wound state
+  const effectiveAttacker = attackingUnit && attackerWoundState
+    ? { ...attackingUnit, modelCount: attackerWoundState.woundsRemaining.length }
     : attackingUnit
 
   // Get defender wound state for WoundInput
@@ -128,7 +142,7 @@ export function App() {
 
   // Calculate recommended target (highest estimated wounds from current weapon)
   const recommendedTargetId = (() => {
-    if (!effectiveAttacker || !selectedWeapon || !armyB || !battleState) return null
+    if (!effectiveAttacker || !selectedWeapon || !defendingRoster || !battleState) return null
     let bestId: string | null = null
     let bestWounds = 0
     const defaultOptions = {
@@ -140,7 +154,7 @@ export function App() {
       indirectFiring: false,
       spotterAvailable: false,
     }
-    for (const unit of armyB.units) {
+    for (const unit of defendingRoster.units) {
       if (battleState.unitWounds[unit.id]?.isDead) continue
       const est = estimateWounds(effectiveAttacker, selectedWeapon, unit, defaultOptions)
       if (est > bestWounds) {
@@ -150,6 +164,16 @@ export function App() {
     }
     return bestId
   })()
+
+  // Show battle summary
+  if (showSummary && battleState) {
+    return (
+      <BattleSummary
+        battleState={battleState}
+        onDismiss={() => setShowSummary(false)}
+      />
+    )
+  }
 
   return (
     <div class="min-h-screen bg-base-100 text-base-content flex flex-col max-w-lg mx-auto">
@@ -168,14 +192,21 @@ export function App() {
           {battleState && (
             <div class="flex items-center justify-between px-4 py-2 bg-base-200 border-b border-base-content/10">
               <div class="text-sm font-medium">
-                Round {battleState.currentRound} — <span class="capitalize">{battleState.currentPhase}</span> Phase
+                Round {battleState.currentRound} — <span class="capitalize">{battleState.currentTurn}</span> <span class="capitalize">{battleState.currentPhase}</span> Phase
               </div>
-              <button
-                class="btn btn-ghost btn-xs"
-                onClick={handleAdvancePhase}
-              >
-                Next Phase →
-              </button>
+              <PhaseNavigator
+                battleState={battleState}
+                onAdvance={handleAdvancePhase}
+                onJumpTo={(round, turn, phase) => {
+                  if (!battleState) return
+                  setBattleState(jumpToPhase(battleState, round, turn, phase))
+                  setAttackingUnit(null)
+                  setDefendingUnit(null)
+                  setSelectedWeapon(null)
+                  setSwapped(false)
+                }}
+                onViewSummary={() => setShowSummary(true)}
+              />
             </div>
           )}
 
@@ -226,11 +257,10 @@ export function App() {
           {/* Unit picker dropdown */}
           {picking === 'attacker' && (
             <UnitPicker
-              roster={armyA}
+              roster={attackingRoster!}
               onSelect={(unit) => {
                 setAttackingUnit(unit)
                 setSelectedWeapon(null)
-                setActiveModels(unit.modelCount)
                 setPicking(null)
               }}
               unitWounds={battleState?.unitWounds}
@@ -238,7 +268,7 @@ export function App() {
           )}
           {picking === 'defender' && (
             <UnitPicker
-              roster={armyB}
+              roster={defendingRoster!}
               onSelect={(unit) => {
                 setDefendingUnit(unit)
                 setPicking(null)
@@ -251,12 +281,22 @@ export function App() {
           {/* Main content */}
           {!picking && (
             <div class="p-4 space-y-4 flex-1">
-              {/* Model count adjuster */}
-              {attackingUnit && activeModels !== null && (
-                <ModelCounter
-                  max={attackingUnit.modelCount}
-                  value={activeModels}
-                  onChange={setActiveModels}
+              {/* Heal/restore unit */}
+              {attackingUnit && attackerWoundState && (
+                <HealUnit
+                  unitWoundState={attackerWoundState}
+                  originalModelCount={attackingUnit.modelCount}
+                  onCommit={(woundsRestored) => {
+                    if (!battleState) return
+                    setBattleState(applyHeal(
+                      battleState,
+                      attackingUnit.id,
+                      attackingUnit.name,
+                      woundsRestored,
+                      attackingUnit.modelCount,
+                      attackingUnit.wounds
+                    ))
+                  }}
                 />
               )}
 
