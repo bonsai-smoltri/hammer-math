@@ -310,22 +310,6 @@ function RuleForm({
           />
         </div>
 
-        {/* Applies To */}
-        <div class="form-control">
-          <label class="label"><span class="label-text text-xs">Applies when unit is...</span></label>
-          <div class="flex gap-2">
-            {(['attacker', 'defender', 'both'] as const).map(opt => (
-              <button
-                key={opt}
-                class={`btn btn-sm flex-1 ${appliesTo === opt ? 'btn-primary' : 'btn-ghost border border-base-content/20'}`}
-                onClick={() => setAppliesTo(opt)}
-              >
-                {opt === 'both' ? 'Both' : opt.charAt(0).toUpperCase() + opt.slice(1)}
-              </button>
-            ))}
-          </div>
-        </div>
-
         {/* Target Type */}
         <div class="form-control">
           <label class="label"><span class="label-text text-xs">Applies to...</span></label>
@@ -362,6 +346,22 @@ function RuleForm({
             )}
           </div>
         )}
+
+        {/* Applies To */}
+        <div class="form-control">
+          <label class="label"><span class="label-text text-xs">Applies when unit is...</span></label>
+          <div class="flex gap-2">
+            {(['attacker', 'defender', 'both'] as const).map(opt => (
+                <button
+                    key={opt}
+                    class={`btn btn-sm flex-1 ${appliesTo === opt ? 'btn-primary' : 'btn-ghost border border-base-content/20'}`}
+                    onClick={() => setAppliesTo(opt)}
+                >
+                  {opt === 'both' ? 'Both' : opt.charAt(0).toUpperCase() + opt.slice(1)}
+                </button>
+            ))}
+          </div>
+        </div>
 
         {/* Unit multi-select */}
         {targetType === 'unit' && (
