@@ -10,11 +10,14 @@ import { PhaseNavigator } from './components/PhaseNavigator'
 import { BattleSummary } from './components/BattleSummary'
 import { WoundInput } from './components/WoundInput'
 import { parseRoster } from './lib/roster-parser'
-import { saveRoster, loadRoster, clearRosters } from './lib/storage'
+import { RulesPage } from './components/RulesPage'
+import { saveRoster, loadRoster, clearRosters, saveGameState, loadGameState, clearGameState } from './lib/storage'
+import { saveRules, loadRules } from './lib/rules-storage'
 import { createBattleState, advancePhase, jumpToPhase, applyAttack, applyHeal } from './lib/battle-state'
 import { estimateWounds } from './lib/combat-math'
 import type { ParsedRoster, ParsedUnit, ParsedWeapon } from './types/roster'
 import type { BattleState } from './types/battle'
+import type { CustomRule } from './types/rules'
 import type { DamageResult } from './lib/battle-state'
 
 export function App() {
@@ -27,13 +30,46 @@ export function App() {
   const [battleState, setBattleState] = useState<BattleState | null>(null)
   const [swapped, setSwapped] = useState(false)
   const [showSummary, setShowSummary] = useState(false)
+  const [showRules, setShowRules] = useState(false)
+  const [customRules, setCustomRules] = useState<CustomRule[]>([])
 
-  // Load rosters from localStorage on mount
+  // Load rosters and game state from localStorage on mount
   useEffect(() => {
     const storedA = loadRoster('A')
     const storedB = loadRoster('B')
     if (storedA) setArmyA(storedA)
     if (storedB) setArmyB(storedB)
+
+    // Load custom rules
+    setCustomRules(loadRules())
+
+    // Restore game state
+    const savedGame = loadGameState()
+    if (savedGame && storedA && storedB) {
+      if (savedGame.battleState) setBattleState(savedGame.battleState)
+      setSwapped(savedGame.swapped ?? false)
+
+      // Restore selected units by ID
+      const allUnitsA = storedA.units
+      const allUnitsB = storedB.units
+      const allUnits = [...allUnitsA, ...allUnitsB]
+
+      if (savedGame.attackingUnitId) {
+        const unit = allUnits.find(u => u.id === savedGame.attackingUnitId)
+        if (unit) setAttackingUnit(unit)
+      }
+      if (savedGame.defendingUnitId) {
+        const unit = allUnits.find(u => u.id === savedGame.defendingUnitId)
+        if (unit) setDefendingUnit(unit)
+      }
+      if (savedGame.selectedWeaponName && savedGame.attackingUnitId) {
+        const attacker = allUnits.find(u => u.id === savedGame.attackingUnitId)
+        if (attacker) {
+          const weapon = attacker.weapons.find(w => w.name === savedGame.selectedWeaponName)
+          if (weapon) setSelectedWeapon(weapon)
+        }
+      }
+    }
   }, [])
 
   // Initialize battle state when both rosters are loaded
@@ -42,6 +78,19 @@ export function App() {
       setBattleState(createBattleState(armyA, armyB))
     }
   }, [armyA, armyB])
+
+  // Persist game state to localStorage on every change
+  useEffect(() => {
+    if (battleState || attackingUnit || defendingUnit || selectedWeapon) {
+      saveGameState({
+        battleState,
+        attackingUnitId: attackingUnit?.id ?? null,
+        defendingUnitId: defendingUnit?.id ?? null,
+        selectedWeaponName: selectedWeapon?.name ?? null,
+        swapped,
+      })
+    }
+  }, [battleState, attackingUnit, defendingUnit, selectedWeapon, swapped])
 
   const handleRosterUpload = (file: File, army: 'A' | 'B') => {
     const reader = new FileReader()
@@ -59,6 +108,7 @@ export function App() {
           setDefendingUnit(null)
         }
         // Reset battle state when rosters change
+        clearGameState()
         setBattleState(null)
       } catch (err) {
         console.error('Failed to parse roster:', err)
@@ -69,12 +119,31 @@ export function App() {
 
   const handleClear = () => {
     clearRosters()
+    clearGameState()
     setArmyA(null)
     setArmyB(null)
     setAttackingUnit(null)
     setDefendingUnit(null)
     setSelectedWeapon(null)
     setBattleState(null)
+  }
+
+  const handleResetGame = () => {
+    clearGameState()
+    setAttackingUnit(null)
+    setDefendingUnit(null)
+    setSelectedWeapon(null)
+    setSwapped(false)
+    if (armyA && armyB) {
+      setBattleState(createBattleState(armyA, armyB))
+    } else {
+      setBattleState(null)
+    }
+  }
+
+  const handleSaveRules = (rules: CustomRule[]) => {
+    setCustomRules(rules)
+    saveRules(rules)
   }
 
   const handleSwap = () => {
@@ -165,6 +234,19 @@ export function App() {
     return bestId
   })()
 
+  // Show rules page
+  if (showRules) {
+    return (
+      <RulesPage
+        rules={customRules}
+        onSave={handleSaveRules}
+        onBack={() => setShowRules(false)}
+        armyA={armyA}
+        armyB={armyB}
+      />
+    )
+  }
+
   // Show battle summary
   if (showSummary && battleState) {
     return (
@@ -251,6 +333,8 @@ export function App() {
               armyB={armyB}
               onReplace={handleRosterUpload}
               onClear={handleClear}
+              onResetGame={handleResetGame}
+              onOpenRules={() => setShowRules(true)}
             />
           </div>
 
@@ -320,6 +404,13 @@ export function App() {
                   attacker={effectiveAttacker}
                   weapon={selectedWeapon}
                   defender={defendingUnit}
+                  customRules={customRules}
+                  onToggleRule={(ruleId) => {
+                    const updated = customRules.map(r =>
+                      r.id === ruleId ? { ...r, enabled: !r.enabled } : r
+                    )
+                    handleSaveRules(updated)
+                  }}
                 />
               )}
 

@@ -5,9 +5,11 @@ interface Props {
   armyB: ParsedRoster
   onReplace: (file: File, army: 'A' | 'B') => void
   onClear: () => void
+  onResetGame: () => void
+  onOpenRules: () => void
 }
 
-export function BurgerMenu({ armyA, armyB, onReplace, onClear }: Props) {
+export function BurgerMenu({ armyA, armyB, onReplace, onClear, onResetGame, onOpenRules }: Props) {
   return (
     <div class="dropdown dropdown-end self-center shrink-0">
       <label tabIndex={0} class="btn btn-ghost btn-sm">
@@ -51,6 +53,20 @@ export function BurgerMenu({ armyA, armyB, onReplace, onClear }: Props) {
         </label>
 
         <div class="divider my-0"></div>
+
+        <button
+          class="btn btn-ghost btn-sm w-full"
+          onClick={onOpenRules}
+        >
+          ⚙️ Custom Rules
+        </button>
+
+        <button
+          class="btn btn-ghost btn-sm text-warning w-full"
+          onClick={onResetGame}
+        >
+          Reset Game
+        </button>
 
         <button
           class="btn btn-ghost btn-sm text-error w-full"

@@ -1,14 +1,17 @@
 import { useState } from 'preact/hooks'
 import type { ParsedUnit, ParsedWeapon } from '../types/roster'
+import type { CustomRule } from '../types/rules'
 import { calculateAttack, estimateWounds, type CombatOptions } from '../lib/combat-math'
 
 interface Props {
   attacker: ParsedUnit
   weapon: ParsedWeapon
   defender: ParsedUnit
+  customRules: CustomRule[]
+  onToggleRule: (ruleId: string) => void
 }
 
-export function AttackSummary({ attacker, weapon, defender }: Props) {
+export function AttackSummary({ attacker, weapon, defender, customRules, onToggleRule }: Props) {
   const [options, setOptions] = useState<CombatOptions>({
     inHalfRange: false,
     remainedStationary: false,
@@ -19,8 +22,24 @@ export function AttackSummary({ attacker, weapon, defender }: Props) {
     spotterAvailable: false,
   })
 
-  const result = calculateAttack(attacker, weapon, defender, options)
-  const estimated = estimateWounds(attacker, weapon, defender, options)
+  // Filter custom rules that match the current attacker/defender context
+  const matchingRules = customRules.filter(rule => {
+    // Check if rule applies to attacker side
+    if (rule.appliesTo === 'attacker' || rule.appliesTo === 'both') {
+      if (ruleMatchesUnit(rule, attacker)) return true
+    }
+    // Check if rule applies to defender side
+    if (rule.appliesTo === 'defender' || rule.appliesTo === 'both') {
+      if (ruleMatchesUnit(rule, defender)) return true
+    }
+    return false
+  })
+
+  // Get enabled matching rules for combat math
+  const activeRules = matchingRules.filter(r => r.enabled)
+
+  const result = calculateAttack(attacker, weapon, defender, options, activeRules)
+  const estimated = estimateWounds(attacker, weapon, defender, options, activeRules)
 
   // Determine which toggles to show
   const hasRapidFire = hasKw(weapon, 'Rapid Fire')
@@ -102,6 +121,17 @@ export function AttackSummary({ attacker, weapon, defender }: Props) {
               />
             </>
           )}
+
+          {/* Custom rule toggles */}
+          {matchingRules.map(rule => (
+            <OptionButton
+              key={rule.id}
+              label={rule.name}
+              active={rule.enabled}
+              onClick={() => onToggleRule(rule.id)}
+              variant="accent"
+            />
+          ))}
         </div>
 
         {/* Attack Summary Output */}
@@ -156,9 +186,9 @@ function OptionButton({
   label: string
   active: boolean
   onClick: () => void
-  variant?: 'primary' | 'warning'
+  variant?: 'primary' | 'warning' | 'accent'
 }) {
-  const activeClass = variant === 'warning' ? 'btn-warning' : 'btn-primary'
+  const activeClass = variant === 'warning' ? 'btn-warning' : variant === 'accent' ? 'btn-accent' : 'btn-primary'
   return (
     <button
       class={`btn btn-xs ${active ? activeClass : 'btn-ghost border border-base-content/20'}`}
@@ -210,4 +240,20 @@ function buildWoundLine(result: ReturnType<typeof calculateAttack>): string {
 
 function hasKw(weapon: ParsedWeapon, keyword: string): boolean {
   return weapon.keywords.some((k) => k.name.toLowerCase() === keyword.toLowerCase())
+}
+
+/** Check if a custom rule's target matches a given unit */
+function ruleMatchesUnit(rule: CustomRule, unit: ParsedUnit): boolean {
+  const { target } = rule
+  if (target.type === 'global') return true
+  if (target.type === 'faction' && target.factionKeyword) {
+    return unit.keywords.some(k =>
+      k.toLowerCase() === target.factionKeyword!.toLowerCase() ||
+      k.toLowerCase() === `faction: ${target.factionKeyword!.toLowerCase()}`
+    )
+  }
+  if (target.type === 'unit' && target.unitIds) {
+    return target.unitIds.includes(unit.id)
+  }
+  return false
 }

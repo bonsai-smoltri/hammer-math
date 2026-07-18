@@ -44,9 +44,12 @@ function parseSelection(selection: any): ParsedUnit | null {
   // Extract model count
   const modelCount = getModelCount(selection)
 
-  // Extract invulnerable save and FNP from abilities
+  // Extract invulnerable save directly from profile if available
+  const profileInvuln = parseInvulnFromProfile(unitProfile.InSv)
+
+  // Extract abilities for FNP and fallback invuln detection
   const abilities = collectAbilityTexts(selection)
-  const invulnerableSave = parseInvulnerableSave(abilities)
+  const invulnerableSave = profileInvuln ?? parseInvulnerableSave(abilities)
   const feelNoPain = parseFeelNoPain(abilities)
 
   // Extract weapons
@@ -71,9 +74,9 @@ function parseSelection(selection: any): ParsedUnit | null {
 }
 
 function findUnitProfile(selection: any): Record<string, string> | null {
-  // Look for a profile with typeName "Unit"
+  // Look for a profile with typeName "Unit" or "Model"
   for (const profile of selection.profiles ?? []) {
-    if (profile.typeName === 'Unit') {
+    if (profile.typeName === 'Unit' || profile.typeName === 'Model') {
       const stats: Record<string, string> = {}
       for (const char of profile.characteristics ?? []) {
         stats[char.name] = char.$text
@@ -92,13 +95,15 @@ function findUnitProfile(selection: any): Record<string, string> | null {
 }
 
 function getModelCount(selection: any): number {
-  // For "unit" type, look at model sub-selections
+  // For "unit" type, sum all model sub-selections
   if (selection.type === 'unit') {
+    let total = 0
     for (const sub of selection.selections ?? []) {
       if (sub.type === 'model') {
-        return sub.number ?? 1
+        total += sub.number ?? 1
       }
     }
+    if (total > 0) return total
   }
   return selection.number ?? 1
 }
@@ -119,6 +124,12 @@ function collectAbilityTexts(selection: any): string[] {
   }
 
   return texts
+}
+
+function parseInvulnFromProfile(invulnStr: string | undefined): number | null {
+  if (!invulnStr || invulnStr === '-' || invulnStr === 'N/A') return null
+  const match = invulnStr.match(/(\d+)/)
+  return match ? parseInt(match[1]) : null
 }
 
 function parseInvulnerableSave(abilities: string[]): number | null {

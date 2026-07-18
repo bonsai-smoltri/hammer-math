@@ -1,4 +1,5 @@
 import type { ParsedUnit, ParsedWeapon } from '../types/roster'
+import type { CustomRule } from '../types/rules'
 
 // --- Pipeline Types ---
 
@@ -316,7 +317,8 @@ export function calculateAttack(
   attacker: ParsedUnit,
   weapon: ParsedWeapon,
   defender: ParsedUnit,
-  options: CombatOptions
+  options: CombatOptions,
+  customRules: CustomRule[] = []
 ): AttackResult {
   const ctx: AttackContext = { attacker, weapon, defender, options }
 
@@ -353,6 +355,9 @@ export function calculateAttack(
       state = modifier.apply(state, ctx)
     }
   }
+
+  // Apply custom rules
+  state = applyCustomRules(state, customRules)
 
   // Clamp hit threshold (before override check)
   state.hitThreshold = Math.max(2, Math.min(6, state.hitThreshold))
@@ -401,7 +406,8 @@ export function estimateWounds(
   attacker: ParsedUnit,
   weapon: ParsedWeapon,
   defender: ParsedUnit,
-  options: CombatOptions
+  options: CombatOptions,
+  customRules: CustomRule[] = []
 ): number {
   const ctx: AttackContext = { attacker, weapon, defender, options }
 
@@ -438,6 +444,9 @@ export function estimateWounds(
     }
   }
 
+  // Apply custom rules
+  state = applyCustomRules(state, customRules)
+
   state.hitThreshold = Math.max(2, Math.min(6, state.hitThreshold))
 
   // Calculate number of attacks
@@ -446,7 +455,13 @@ export function estimateWounds(
 
   // Hit probability
   const effectiveHitThreshold = state.overrideHitMinimum ?? state.hitThreshold
-  const hitProb = state.autoHit ? 1 : (7 - effectiveHitThreshold) / 6
+  let hitProb = state.autoHit ? 1 : (7 - effectiveHitThreshold) / 6
+
+  // Re-roll hits from custom rules
+  const hasRerollHits = customRules.some(r => r.effects.rerollHits)
+  if (hasRerollHits && !state.autoHit) {
+    hitProb = hitProb + (1 - hitProb) * hitProb
+  }
 
   // Sustained hits bonus (extra hits on crit)
   const sustainedHits = getSustainedHitsValue(state)
@@ -481,7 +496,18 @@ export function estimateWounds(
 
   // Save probability
   const modifiedSave = defender.save + state.apValue
-  const invuln = defender.invulnerableSave
+  let invuln = defender.invulnerableSave
+
+  // Check for custom rule invuln override
+  for (const rule of customRules) {
+    if (rule.effects.invulnOverride) {
+      const ruleInvuln = rule.effects.invulnOverride
+      if (invuln === null || ruleInvuln < invuln) {
+        invuln = ruleInvuln
+      }
+    }
+  }
+
   let effectiveSave: number
 
   if (invuln !== null) {
@@ -494,7 +520,16 @@ export function estimateWounds(
   const unsavedWounds = totalWoundsBeforeSave * (1 - saveProb)
 
   // Feel No Pain
-  const fnp = defender.feelNoPain
+  let fnp = defender.feelNoPain
+  // Check for custom rule FNP
+  for (const rule of customRules) {
+    if (rule.effects.feelNoPain) {
+      const ruleFnp = rule.effects.feelNoPain
+      if (fnp === null || ruleFnp < fnp) {
+        fnp = ruleFnp
+      }
+    }
+  }
   const fnpProb = fnp ? (7 - fnp) / 6 : 0
   const woundsAfterFnp = unsavedWounds * (1 - fnpProb)
 
@@ -532,6 +567,111 @@ function getSustainedHitsValue(state: AttackState): number {
     if (match) return parseInt(match[1])
   }
   return 0
+}
+
+// --- Apply Custom Rules ---
+
+function applyCustomRules(state: AttackState, rules: CustomRule[]): AttackState {
+  for (const rule of rules) {
+    const { effects } = rule
+
+    if (effects.hitModifier) {
+      state = {
+        ...state,
+        hitThreshold: state.hitThreshold - effects.hitModifier,
+        hitModifiers: [...state.hitModifiers, `${effects.hitModifier > 0 ? '+' : ''}${effects.hitModifier} ${rule.name}`],
+      }
+    }
+
+    if (effects.woundModifier) {
+      state = {
+        ...state,
+        woundThreshold: Math.max(2, state.woundThreshold - effects.woundModifier),
+        woundModifiers: [...state.woundModifiers, `${effects.woundModifier > 0 ? '+' : ''}${effects.woundModifier} ${rule.name}`],
+      }
+    }
+
+    if (effects.ignoresCover) {
+      state = { ...state, ignoreCover: true }
+    }
+
+    if (effects.apModifier) {
+      state = { ...state, apValue: state.apValue + effects.apModifier }
+    }
+
+    if (effects.rerollHits) {
+      state = {
+        ...state,
+        notes: [...state.notes, `Re-roll hits (${rule.name})`],
+      }
+    }
+
+    if (effects.rerollWounds) {
+      state = { ...state, rerollWounds: true }
+    }
+
+    if (effects.bonusDamage) {
+      state = {
+        ...state,
+        bonusDamage: state.bonusDamage + effects.bonusDamage,
+        bonusDamageNote: `+${state.bonusDamage + effects.bonusDamage} (${rule.name})`,
+      }
+    }
+
+    if (effects.critHitOn) {
+      const threshold = effects.critHitOn
+      state = {
+        ...state,
+        critHitEffects: [...state.critHitEffects, `Critical hits on ${threshold}+ (${rule.name})`],
+      }
+    }
+
+    if (effects.critWoundOn) {
+      state = {
+        ...state,
+        critWoundThreshold: Math.min(state.critWoundThreshold, effects.critWoundOn),
+        critWoundEffects: [...state.critWoundEffects, `Critical wounds on ${effects.critWoundOn}+ (${rule.name})`],
+      }
+    }
+
+    if (effects.sustainedHits) {
+      state = {
+        ...state,
+        critHitEffects: [...state.critHitEffects, `Sustained Hits ${effects.sustainedHits} (${rule.name})`],
+      }
+    }
+
+    if (effects.lethalHits) {
+      state = {
+        ...state,
+        critHitEffects: [...state.critHitEffects, `Lethal Hits (${rule.name})`],
+      }
+    }
+
+    if (effects.saveModifier) {
+      state = {
+        ...state,
+        apValue: state.apValue - effects.saveModifier,
+        notes: [...state.notes, `Save modified by ${effects.saveModifier > 0 ? '+' : ''}${effects.saveModifier} (${rule.name})`],
+      }
+    }
+
+    if (effects.feelNoPain) {
+      state = {
+        ...state,
+        notes: [...state.notes, `Feel No Pain ${effects.feelNoPain}+ (${rule.name})`],
+      }
+    }
+
+    if (effects.invulnOverride) {
+      state = {
+        ...state,
+        notes: [...state.notes, `Invulnerable Save ${effects.invulnOverride}+ (${rule.name})`],
+      }
+    }
+  }
+
+  return state
 }
 
 // --- Helpers ---
