@@ -440,7 +440,7 @@ function EffectRow({
     <div class="flex items-center justify-between gap-2">
       <span class="text-xs">{label}</span>
       <input
-        type="number"
+        type={type}
         class="input input-bordered input-xs w-16 text-center"
         value={value ?? ''}
         placeholder={placeholder ?? '0'}
