@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local rosters, rule exports and reference material.
+# Tests use inline fixtures, so nothing in here is needed to build or test.
+data/

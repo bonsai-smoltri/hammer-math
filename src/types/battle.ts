@@ -6,8 +6,10 @@ export interface UnitWoundState {
   unitId: string
   unitName: string
   woundsPerModel: number        // from datasheet
+  startingModelCount: number    // starting strength, for restoring models
   woundsRemaining: number[]     // one entry per living model, e.g. [3, 3, 2]
   isDead: boolean               // true when all models destroyed
+  battleShocked: boolean        // 01.07 — OC 0, no stratagems, no actions
 }
 
 /** A single attack action recorded in the battle log */
@@ -30,7 +32,7 @@ export interface AttackAction {
   timestamp: number
 }
 
-/** A heal/restore action recorded in the battle log */
+/** A wounds adjustment recorded in the battle log. Values are negative when wounds are removed. */
 export interface HealAction {
   id: string
   type: 'heal'

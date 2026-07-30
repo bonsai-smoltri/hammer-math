@@ -1,23 +1,29 @@
-import { useState, useEffect } from 'preact/hooks'
+import { useState, useEffect, useMemo } from 'preact/hooks'
 import { RosterUpload } from './components/RosterUpload'
 import { BurgerMenu } from './components/BurgerMenu'
 import { UnitPicker } from './components/UnitPicker'
 import { WeaponSelector } from './components/WeaponSelector'
 import { AttackSummary } from './components/AttackSummary'
-import { DefenderStats } from './components/DefenderStats'
-import { HealUnit } from './components/HealUnit'
+import { ProfilePanel } from './components/ProfilePanel'
 import { PhaseNavigator } from './components/PhaseNavigator'
 import { BattleSummary } from './components/BattleSummary'
 import { WoundInput } from './components/WoundInput'
 import { parseRoster } from './lib/roster-parser'
 import { RulesPage } from './components/RulesPage'
 import { saveRoster, loadRoster, clearRosters, saveGameState, loadGameState, clearGameState } from './lib/storage'
-import { saveRules, loadRules } from './lib/rules-storage'
-import { createBattleState, advancePhase, jumpToPhase, applyAttack, applyHeal } from './lib/battle-state'
+import { emptyPayload, loadRulesPayload, saveRulesPayload, type RulesPayload } from './lib/rules-storage'
+import {
+  createBattleState,
+  advancePhase,
+  jumpToPhase,
+  applyAttack,
+  setBattleShocked,
+  setUnitWounds,
+} from './lib/battle-state'
 import { estimateWounds } from './lib/combat-math'
-import type { ParsedRoster, ParsedUnit, ParsedWeapon } from './types/roster'
+import type { ParsedAttachment, ParsedRoster, ParsedUnit, ParsedWeapon } from './types/roster'
 import type { BattleState } from './types/battle'
-import type { CustomRule } from './types/rules'
+import type { KeywordAttachment } from './types/rules'
 import type { DamageResult } from './lib/battle-state'
 
 export function App() {
@@ -31,7 +37,11 @@ export function App() {
   const [swapped, setSwapped] = useState(false)
   const [showSummary, setShowSummary] = useState(false)
   const [showRules, setShowRules] = useState(false)
-  const [customRules, setCustomRules] = useState<CustomRule[]>([])
+  const [rulesPayload, setRulesPayload] = useState<RulesPayload>(emptyPayload())
+  const [rosterErrors, setRosterErrors] = useState<{ A: string | null; B: string | null }>({
+    A: null,
+    B: null,
+  })
 
   // Load rosters and game state from localStorage on mount
   useEffect(() => {
@@ -40,8 +50,8 @@ export function App() {
     if (storedA) setArmyA(storedA)
     if (storedB) setArmyB(storedB)
 
-    // Load custom rules
-    setCustomRules(loadRules())
+    // Load custom rules and keyword attachments
+    setRulesPayload(loadRulesPayload())
 
     // Restore game state
     const savedGame = loadGameState()
@@ -49,10 +59,7 @@ export function App() {
       if (savedGame.battleState) setBattleState(savedGame.battleState)
       setSwapped(savedGame.swapped ?? false)
 
-      // Restore selected units by ID
-      const allUnitsA = storedA.units
-      const allUnitsB = storedB.units
-      const allUnits = [...allUnitsA, ...allUnitsB]
+      const allUnits = [...storedA.units, ...storedB.units]
 
       if (savedGame.attackingUnitId) {
         const unit = allUnits.find(u => u.id === savedGame.attackingUnitId)
@@ -94,10 +101,20 @@ export function App() {
 
   const handleRosterUpload = (file: File, army: 'A' | 'B') => {
     const reader = new FileReader()
+    reader.onerror = () =>
+      setRosterErrors((prev) => ({ ...prev, [army]: `Could not read ${file.name}.` }))
     reader.onload = (e) => {
       try {
         const json = JSON.parse(e.target?.result as string)
         const parsed = parseRoster(json)
+        if (parsed.units.length === 0) {
+          setRosterErrors((prev) => ({
+            ...prev,
+            [army]: `No units found in ${file.name}. Export the roster as BattleScribe JSON, not .ros.`,
+          }))
+          return
+        }
+        setRosterErrors((prev) => ({ ...prev, [army]: null }))
         saveRoster(army, parsed)
         if (army === 'A') {
           setArmyA(parsed)
@@ -112,6 +129,10 @@ export function App() {
         setBattleState(null)
       } catch (err) {
         console.error('Failed to parse roster:', err)
+        setRosterErrors((prev) => ({
+          ...prev,
+          [army]: `${file.name} is not valid JSON.`,
+        }))
       }
     }
     reader.readAsText(file)
@@ -141,9 +162,9 @@ export function App() {
     }
   }
 
-  const handleSaveRules = (rules: CustomRule[]) => {
-    setCustomRules(rules)
-    saveRules(rules)
+  const handleSaveRules = (payload: RulesPayload) => {
+    setRulesPayload(payload)
+    saveRulesPayload(payload)
   }
 
   const handleSwap = () => {
@@ -194,40 +215,98 @@ export function App() {
 
   const bothLoaded = armyA !== null && armyB !== null
 
-  // Get attacker wound state for HealUnit and model count
+  const allUnits = useMemo(
+    () => [...(armyA?.units ?? []), ...(armyB?.units ?? [])],
+    [armyA, armyB]
+  )
+
+  /**
+   * Only attachments the roster explicitly marks are applied. A Leader ability
+   * saying a Character *can* join a squad is not a statement that it did, so
+   * those are offered as suggestions on the Attachments tab instead.
+   */
+  const rosterAttachments = useMemo<KeywordAttachment[]>(() => {
+    const out: KeywordAttachment[] = []
+    for (const link of [...(armyA?.attachments ?? []), ...(armyB?.attachments ?? [])]) {
+      const id = `attach-${link.leaderUnitId}-${link.bodyguardUnitId}`
+      out.push({
+        id,
+        name: `${link.leaderName} leads ${link.bodyguardName}`,
+        keywords: [],
+        ruleIds: [],
+        unitIds: [link.bodyguardUnitId],
+        sourceUnitId: link.leaderUnitId,
+        enabled: !rulesPayload.disabledAttachmentIds.includes(id),
+      })
+    }
+    return out
+  }, [armyA, armyB, rulesPayload.disabledAttachmentIds])
+
+  const attachmentSuggestions = useMemo<ParsedAttachment[]>(
+    () => [...(armyA?.attachmentCandidates ?? []), ...(armyB?.attachmentCandidates ?? [])],
+    [armyA, armyB]
+  )
+
+  const attachments = useMemo(
+    () => [...rosterAttachments, ...rulesPayload.attachments],
+    [rosterAttachments, rulesPayload.attachments]
+  )
+
   const attackerWoundState = battleState && attackingUnit
     ? battleState.unitWounds[attackingUnit.id] ?? null
     : null
 
-  // Build the effective attacker with model count from wound state
-  const effectiveAttacker = attackingUnit && attackerWoundState
-    ? { ...attackingUnit, modelCount: attackerWoundState.woundsRemaining.length }
-    : attackingUnit
-
-  // Get defender wound state for WoundInput
   const defenderWoundState = battleState && defendingUnit
     ? battleState.unitWounds[defendingUnit.id] ?? null
     : null
 
-  // Calculate recommended target (highest estimated wounds from current weapon)
+  // Surviving models drive the attacker's effective model count
+  const effectiveAttacker = attackingUnit && attackerWoundState
+    ? { ...attackingUnit, modelCount: attackerWoundState.woundsRemaining.length }
+    : attackingUnit
+
+  const effectiveDefender = defendingUnit && defenderWoundState
+    ? { ...defendingUnit, modelCount: defenderWoundState.woundsRemaining.length }
+    : defendingUnit
+
+  /** Weapons are lost with the models carrying them. */
+  const defaultWeaponCount = (() => {
+    if (!selectedWeapon || !attackingUnit) return undefined
+    const count = selectedWeapon.count ?? attackingUnit.modelCount
+    if (!attackerWoundState || attackerWoundState.startingModelCount <= 1) return count
+    const survivors = attackerWoundState.woundsRemaining.length
+    if (survivors >= attackerWoundState.startingModelCount) return count
+    return Math.max(0, Math.round((count * survivors) / attackerWoundState.startingModelCount))
+  })()
+
+  const baseOptions = useMemo(
+    () => ({
+      attackerBattleShocked: attackerWoundState?.battleShocked ?? false,
+      targetBattleShocked: defenderWoundState?.battleShocked ?? false,
+    }),
+    [attackerWoundState?.battleShocked, defenderWoundState?.battleShocked]
+  )
+
+  // Recommended target: highest expected damage with the current weapon
   const recommendedTargetId = (() => {
     if (!effectiveAttacker || !selectedWeapon || !defendingRoster || !battleState) return null
     let bestId: string | null = null
-    let bestWounds = 0
-    const defaultOptions = {
-      inHalfRange: false,
-      remainedStationary: false,
-      targetInCover: false,
-      advanced: false,
-      charged: false,
-      indirectFiring: false,
-      spotterAvailable: false,
-    }
+    let bestDamage = 0
     for (const unit of defendingRoster.units) {
       if (battleState.unitWounds[unit.id]?.isDead) continue
-      const est = estimateWounds(effectiveAttacker, selectedWeapon, unit, defaultOptions)
-      if (est > bestWounds) {
-        bestWounds = est
+      const estimate = estimateWounds({
+        attacker: effectiveAttacker,
+        weapon: selectedWeapon,
+        defender: unit,
+        options: baseOptions,
+        rules: rulesPayload.rules,
+        attachments,
+        allUnits,
+        weaponCount: defaultWeaponCount,
+        availableManualRuleIds: [],
+      })
+      if (estimate > bestDamage) {
+        bestDamage = estimate
         bestId = unit.id
       }
     }
@@ -238,11 +317,12 @@ export function App() {
   if (showRules) {
     return (
       <RulesPage
-        rules={customRules}
-        onSave={handleSaveRules}
+        payload={rulesPayload}
+        onChange={handleSaveRules}
         onBack={() => setShowRules(false)}
-        armyA={armyA}
-        armyB={armyB}
+        units={allUnits}
+        rosterAttachments={rosterAttachments}
+        suggestions={attachmentSuggestions}
       />
     )
   }
@@ -263,7 +343,12 @@ export function App() {
       {!bothLoaded && (
         <div class="p-4">
           <h1 class="text-xl font-bold text-center mb-6">W40k Combat Math</h1>
-          <RosterUpload onUpload={handleRosterUpload} armyA={armyA} armyB={armyB} />
+          <RosterUpload
+            onUpload={handleRosterUpload}
+            armyA={armyA}
+            armyB={armyB}
+            errors={rosterErrors}
+          />
         </div>
       )}
 
@@ -338,6 +423,25 @@ export function App() {
             />
           </div>
 
+          {/* Collapsible profiles: stats, wounds, battle-shock, battlefield abilities */}
+          {!picking && (
+            <ProfilePanel
+              attacker={attackingUnit}
+              defender={defendingUnit}
+              attackerWounds={attackerWoundState}
+              defenderWounds={defenderWoundState}
+              rules={rulesPayload.rules}
+              attachments={attachments}
+              allUnits={allUnits}
+              onSetWounds={(unitId, total) => {
+                if (battleState) setBattleState(setUnitWounds(battleState, unitId, total))
+              }}
+              onSetBattleShocked={(unitId, value) => {
+                if (battleState) setBattleState(setBattleShocked(battleState, unitId, value))
+              }}
+            />
+          )}
+
           {/* Unit picker dropdown */}
           {picking === 'attacker' && (
             <UnitPicker
@@ -365,25 +469,6 @@ export function App() {
           {/* Main content */}
           {!picking && (
             <div class="p-4 space-y-4 flex-1">
-              {/* Heal/restore unit */}
-              {attackingUnit && attackerWoundState && (
-                <HealUnit
-                  unitWoundState={attackerWoundState}
-                  originalModelCount={attackingUnit.modelCount}
-                  onCommit={(woundsRestored) => {
-                    if (!battleState) return
-                    setBattleState(applyHeal(
-                      battleState,
-                      attackingUnit.id,
-                      attackingUnit.name,
-                      woundsRestored,
-                      attackingUnit.modelCount,
-                      attackingUnit.wounds
-                    ))
-                  }}
-                />
-              )}
-
               {/* Weapon selector */}
               {attackingUnit && (
                 <WeaponSelector
@@ -393,24 +478,18 @@ export function App() {
                 />
               )}
 
-              {/* Defender stat summary */}
-              {defendingUnit && (
-                <DefenderStats unit={defendingUnit} />
-              )}
-
               {/* Attack summary */}
-              {selectedWeapon && defendingUnit && effectiveAttacker && (
+              {selectedWeapon && effectiveDefender && effectiveAttacker && (
                 <AttackSummary
                   attacker={effectiveAttacker}
                   weapon={selectedWeapon}
-                  defender={defendingUnit}
-                  customRules={customRules}
-                  onToggleRule={(ruleId) => {
-                    const updated = customRules.map(r =>
-                      r.id === ruleId ? { ...r, enabled: !r.enabled } : r
-                    )
-                    handleSaveRules(updated)
-                  }}
+                  defender={effectiveDefender}
+                  rules={rulesPayload.rules}
+                  attachments={attachments}
+                  pinnedRuleIds={rulesPayload.pinnedRuleIds}
+                  allUnits={allUnits}
+                  baseOptions={baseOptions}
+                  defaultWeaponCount={defaultWeaponCount}
                 />
               )}
 

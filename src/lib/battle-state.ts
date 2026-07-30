@@ -1,4 +1,5 @@
 import type { ParsedRoster } from '../types/roster'
+import { averageDice, isFixedExpression } from './rules/dice'
 import type {
   BattleState,
   BattleRound,
@@ -19,8 +20,10 @@ export function createBattleState(armyA: ParsedRoster, armyB: ParsedRoster): Bat
       unitId: unit.id,
       unitName: unit.name,
       woundsPerModel: unit.wounds,
+      startingModelCount: unit.modelCount,
       woundsRemaining: Array(unit.modelCount).fill(unit.wounds),
       isDead: false,
+      battleShocked: false,
     }
   }
 
@@ -96,97 +99,77 @@ export interface DamageResult {
   modelsRemoved: number
   newWoundsRemaining: number[]
   unitDestroyed: boolean
+  /** Wounds actually removed from the unit, i.e. excluding overkill. */
+  woundsLost: number
+}
+
+/** What got through to the target. */
+export interface DamageAllocation {
+  /**
+   * The damage inflicted by each failed save. Every entry is allocated to a
+   * single model and any excess is lost (05.04), so [6] against a 2-wound model
+   * kills one model, not three.
+   */
+  failedSaves: number[]
+  /**
+   * Mortal wounds, which are resolved one wound at a time and do carry on to the
+   * next model (06.02). Resolved after all normal damage.
+   */
+  mortalWounds: number
 }
 
 /**
- * Calculate how wounds are applied to a unit.
+ * Applies an attack's damage to a unit.
  *
- * Rules:
- * - Each failed save deals weapon damage to ONE model
- * - Excess damage on a model is lost (doesn't spill)
- * - Damage is allocated to wounded models first
- * - For Devastating Wounds / mortal wounds from Dev Wounds: same rule (max 1 model per crit)
- *
- * For simplicity, we ask the user for total wounds dealt and the weapon's damage per hit.
- * We then walk through the unit's models allocating damage per hit.
+ * Allocation follows the same model until it is destroyed: damage goes to the
+ * already-wounded model first, and only then to a fresh one.
  */
-export function calculateDamage(
+export function allocateDamage(
   unitState: UnitWoundState,
-  woundsDealt: number,
-  damagePerHit: number
+  allocation: DamageAllocation
 ): DamageResult {
-  // Clone the wounds array
   const wounds = [...unitState.woundsRemaining]
-  let modelsRemoved = 0
+  const startingTotal = wounds.reduce((sum, w) => sum + w, 0)
+  const startingModels = wounds.length
+  const { woundsPerModel } = unitState
 
-  // Number of "hits" that got through (failed saves)
-  // Each hit does damagePerHit wounds to one model
-  const hits = Math.ceil(woundsDealt / damagePerHit)
+  const targetIndex = () => {
+    const wounded = wounds.findIndex((w) => w < woundsPerModel)
+    return wounded === -1 ? 0 : wounded
+  }
 
-  // Sort to allocate to wounded models first (lowest wounds first)
-  // But we need to track the actual damage properly
-  // Actually, we allocate hits one at a time to the first wounded model (or first model)
+  for (const damage of allocation.failedSaves) {
+    if (wounds.length === 0 || damage <= 0) continue
+    const index = targetIndex()
+    // Excess damage beyond this model's remaining wounds is lost.
+    wounds[index] -= damage
+    if (wounds[index] <= 0) wounds.splice(index, 1)
+  }
 
-  let remainingHits = hits
-
-  while (remainingHits > 0 && wounds.length > 0) {
-    // Find the first wounded model (one with fewer than max wounds), or first model
-    let targetIdx = wounds.findIndex(w => w < unitState.woundsPerModel)
-    if (targetIdx === -1) targetIdx = 0
-
-    // Apply damage to this model
-    wounds[targetIdx] -= damagePerHit
-
-    if (wounds[targetIdx] <= 0) {
-      // Model destroyed — remove it, excess damage lost
-      wounds.splice(targetIdx, 1)
-      modelsRemoved++
-    }
-
-    remainingHits--
+  for (let i = 0; i < allocation.mortalWounds && wounds.length > 0; i++) {
+    const index = targetIndex()
+    wounds[index] -= 1
+    if (wounds[index] <= 0) wounds.splice(index, 1)
   }
 
   return {
-    modelsRemoved,
+    modelsRemoved: startingModels - wounds.length,
     newWoundsRemaining: wounds,
     unitDestroyed: wounds.length === 0,
+    woundsLost: startingTotal - wounds.reduce((sum, w) => sum + w, 0),
   }
 }
 
-/**
- * Simpler version: user inputs total wounds dealt directly.
- * Used for variable damage weapons (Dd3, Dd6, etc.) where the user
- * has already rolled and tallied total wounds.
- *
- * Allocates wounds one at a time to wounded model first (mortal wound style).
- */
-export function calculateDamageFromTotal(
+/** Convenience for weapons with a fixed D characteristic. */
+export function allocateFixedDamage(
   unitState: UnitWoundState,
-  totalWounds: number
+  failedSaves: number,
+  damagePerSave: number
 ): DamageResult {
-  const wounds = [...unitState.woundsRemaining]
-  let modelsRemoved = 0
-  let remaining = totalWounds
-
-  while (remaining > 0 && wounds.length > 0) {
-    // Allocate to wounded model first
-    let targetIdx = wounds.findIndex(w => w < unitState.woundsPerModel)
-    if (targetIdx === -1) targetIdx = 0
-
-    wounds[targetIdx] -= 1
-    remaining--
-
-    if (wounds[targetIdx] <= 0) {
-      wounds.splice(targetIdx, 1)
-      modelsRemoved++
-    }
-  }
-
-  return {
-    modelsRemoved,
-    newWoundsRemaining: wounds,
-    unitDestroyed: wounds.length === 0,
-  }
+  return allocateDamage(unitState, {
+    failedSaves: Array(Math.max(0, failedSaves)).fill(damagePerSave),
+    mortalWounds: 0,
+  })
 }
 
 /** Apply damage result to the battle state, recording the action */
@@ -202,7 +185,7 @@ export function applyAttack(
 ): BattleState {
   const defenderState = state.unitWounds[defenderUnitId]
   const action: AttackAction = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: newActionId(),
     type: 'attack',
     round: state.currentRound,
     turn: state.currentTurn,
@@ -220,17 +203,6 @@ export function applyAttack(
     timestamp: Date.now(),
   }
 
-  // Update the current round's actions
-  const rounds = [...state.rounds]
-  const currentRoundIdx = rounds.findIndex(r => r.number === state.currentRound)
-  if (currentRoundIdx !== -1) {
-    rounds[currentRoundIdx] = {
-      ...rounds[currentRoundIdx],
-      actions: [...rounds[currentRoundIdx].actions, action],
-    }
-  }
-
-  // Update unit wound state
   const unitWounds = { ...state.unitWounds }
   unitWounds[defenderUnitId] = {
     ...unitWounds[defenderUnitId],
@@ -238,101 +210,128 @@ export function applyAttack(
     isDead: damageResult.unitDestroyed,
   }
 
-  return { ...state, rounds, unitWounds }
+  return {
+    ...state,
+    rounds: appendAction(state.rounds, state.currentRound, action),
+    unitWounds,
+  }
 }
 
-/** Apply a heal/restore to the battle state, recording the action */
-export function applyHeal(
-  state: BattleState,
-  unitId: string,
-  unitName: string,
-  woundsRestored: number,
-  originalModelCount: number,
-  woundsPerModel: number
-): BattleState {
-  // Update unit wound state first to calculate actual models restored
+/** Total wounds remaining across the unit. */
+export function totalWoundsRemaining(unitState: UnitWoundState): number {
+  return unitState.woundsRemaining.reduce((sum, w) => sum + w, 0)
+}
+
+/** Maximum wounds the unit can have (starting strength × wounds per model). */
+export function maxWounds(unitState: UnitWoundState): number {
+  return unitState.startingModelCount * unitState.woundsPerModel
+}
+
+/**
+ * Rebuilds a unit's wound pool from a single total.
+ *
+ * Only one model in a unit can be damaged at a time — damage is allocated to the
+ * same model until it is destroyed — so a total is enough to describe the unit:
+ * as many full-strength models as fit, plus at most one damaged model.
+ */
+export function woundsToModels(total: number, woundsPerModel: number, startingModelCount: number): number[] {
+  const capped = Math.max(0, Math.min(total, startingModelCount * woundsPerModel))
+  const fullModels = Math.floor(capped / woundsPerModel)
+  const remainder = capped % woundsPerModel
+  const models = Array(fullModels).fill(woundsPerModel)
+  if (remainder > 0) models.push(remainder)
+  return models
+}
+
+/**
+ * Sets a unit's remaining wounds directly and records the change.
+ * Used by the +/- control on the unit profile, for damage and healing alike.
+ */
+export function setUnitWounds(state: BattleState, unitId: string, newTotal: number): BattleState {
   const current = state.unitWounds[unitId]
-  const newWounds = [...current.woundsRemaining]
-  let remaining = woundsRestored
-  let modelsRestored = 0
+  if (!current) return state
 
-  // Step 1: Heal the wounded model to full
-  for (let i = 0; i < newWounds.length && remaining > 0; i++) {
-    if (newWounds[i] < woundsPerModel) {
-      const canHeal = Math.min(woundsPerModel - newWounds[i], remaining)
-      newWounds[i] += canHeal
-      remaining -= canHeal
-    }
-  }
+  const before = totalWoundsRemaining(current)
+  const clamped = Math.max(0, Math.min(newTotal, maxWounds(current)))
+  if (clamped === before) return state
 
-  // Step 2: Restore dead models with remaining wounds
-  while (remaining >= woundsPerModel && newWounds.length < originalModelCount) {
-    newWounds.push(woundsPerModel)
-    remaining -= woundsPerModel
-    modelsRestored++
-  }
-
-  // Step 3: If there are leftover wounds and room for a model, add a partial model
-  if (remaining > 0 && newWounds.length < originalModelCount) {
-    newWounds.push(remaining)
-    modelsRestored++
-    remaining = 0
-  }
-
+  const woundsRemaining = woundsToModels(clamped, current.woundsPerModel, current.startingModelCount)
   const action: HealAction = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: newActionId(),
     type: 'heal',
     round: state.currentRound,
     turn: state.currentTurn,
     phase: state.currentPhase,
     unitId,
-    unitName,
-    modelsRestored,
-    woundsRestored,
+    unitName: current.unitName,
+    modelsRestored: woundsRemaining.length - current.woundsRemaining.length,
+    woundsRestored: clamped - before,
     timestamp: Date.now(),
   }
 
-  // Update the current round's actions
-  const rounds = [...state.rounds]
-  const currentRoundIdx = rounds.findIndex(r => r.number === state.currentRound)
-  if (currentRoundIdx !== -1) {
-    rounds[currentRoundIdx] = {
-      ...rounds[currentRoundIdx],
-      actions: [...rounds[currentRoundIdx].actions, action],
-    }
+  return {
+    ...state,
+    rounds: appendAction(state.rounds, state.currentRound, action),
+    unitWounds: {
+      ...state.unitWounds,
+      [unitId]: { ...current, woundsRemaining, isDead: woundsRemaining.length === 0 },
+    },
   }
+}
 
-  const unitWounds = { ...state.unitWounds }
-  unitWounds[unitId] = {
-    ...current,
-    woundsRemaining: newWounds,
-    isDead: newWounds.length === 0,
+/** Flips a unit's battle-shocked state (01.07). */
+export function setBattleShocked(
+  state: BattleState,
+  unitId: string,
+  battleShocked: boolean
+): BattleState {
+  const current = state.unitWounds[unitId]
+  if (!current || current.battleShocked === battleShocked) return state
+  return {
+    ...state,
+    unitWounds: { ...state.unitWounds, [unitId]: { ...current, battleShocked } },
   }
+}
 
-  return { ...state, rounds, unitWounds }
+function newActionId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function appendAction(
+  rounds: BattleRound[],
+  currentRound: number,
+  action: AttackAction | HealAction
+): BattleRound[] {
+  const next = [...rounds]
+  const index = next.findIndex((r) => r.number === currentRound)
+  if (index !== -1) {
+    next[index] = { ...next[index], actions: [...next[index].actions, action] }
+  }
+  return next
 }
 
 /** Get a display-friendly summary of a unit's health */
 export function getUnitHealthSummary(unitState: UnitWoundState): string {
   if (unitState.isDead) return 'Destroyed'
   const alive = unitState.woundsRemaining.length
-  const total = alive * unitState.woundsPerModel
-  const current = unitState.woundsRemaining.reduce((sum, w) => sum + w, 0)
+  const current = totalWoundsRemaining(unitState)
   if (unitState.woundsPerModel === 1) {
     return `${alive} models`
   }
-  return `${alive} models (${current}/${total} wounds)`
+  return `${alive} models (${current}/${maxWounds(unitState)} wounds)`
 }
 
 /** Check if weapon has fixed or variable damage */
 export function isFixedDamage(damageExpression: string): boolean {
-  const num = parseInt(damageExpression)
-  return !isNaN(num) && damageExpression.trim() === String(num)
+  return isFixedExpression(damageExpression)
 }
 
-/** Parse fixed damage value from expression */
+/** Parse fixed damage value from expression, or null when it is variable. */
 export function parseDamageValue(damageExpression: string): number | null {
-  const num = parseInt(damageExpression)
-  if (!isNaN(num) && damageExpression.trim() === String(num)) return num
-  return null
+  return isFixedExpression(damageExpression) ? (averageDice(damageExpression) ?? null) : null
+}
+
+/** Average damage, used to pre-fill the damage inputs for variable weapons. */
+export function averageDamage(damageExpression: string): number {
+  return Math.max(1, Math.round(averageDice(damageExpression) ?? 1))
 }

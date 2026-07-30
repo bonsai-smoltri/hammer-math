@@ -1,4 +1,5 @@
 import type { ParsedRoster } from '../types/roster'
+import { RosterWarnings } from './RosterUpload'
 
 interface Props {
   armyA: ParsedRoster
@@ -35,6 +36,7 @@ export function BurgerMenu({ armyA, armyB, onReplace, onClear, onResetGame, onOp
             }}
           />
         </label>
+        <RosterWarnings roster={armyA} />
 
         {/* Army B - whole item is the replace trigger */}
         <label class="block cursor-pointer rounded-lg p-3 hover:bg-base-300 transition-colors">
@@ -51,6 +53,7 @@ export function BurgerMenu({ armyA, armyB, onReplace, onClear, onResetGame, onOp
             }}
           />
         </label>
+        <RosterWarnings roster={armyB} />
 
         <div class="divider my-0"></div>
 
