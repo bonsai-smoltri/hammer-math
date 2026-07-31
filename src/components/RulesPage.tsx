@@ -784,14 +784,15 @@ function RuleForm({
       <Field label="Numeric effects">
         <div class="space-y-1 border border-base-content/20 rounded-lg p-3">
           {NUMBER_FIELDS.map((field) => (
-            <div key={field.key} class="flex items-center justify-between gap-2">
+            <div key={field.key} class="flex items-center justify-between gap-2 min-h-9">
               <label class="text-xs" for={`effect-${field.key}`}>
                 {field.label}
               </label>
               <input
                 id={`effect-${field.key}`}
                 type="number"
-                class="input input-bordered input-xs w-16 text-center"
+                inputMode="numeric"
+                class="input input-bordered w-16 h-9 text-center"
                 value={effects[field.key] ?? ''}
                 onInput={(e) => {
                   const raw = (e.target as HTMLInputElement).value

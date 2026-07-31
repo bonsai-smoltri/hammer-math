@@ -35,25 +35,47 @@ src/
 │   │   └── *.test.ts    # Engine + keyword tests (vitest)
 │   ├── combat-math.ts   # Presentation layer over the engine (formatting only)
 │   ├── battle-state.ts  # Battle state management (round/phase tracking, damage application)
+│   ├── battle-history.ts # Past battles: archive, validate on read, tally for the home list
 │   ├── roster-parser.ts # Parses BattleScribe JSON export into typed roster data
 │   ├── rules-storage.ts # localStorage + export payload: rules, attachments, pinned rules
 │   └── storage.ts       # localStorage helpers for roster persistence
 └── components/
     ├── AttackSummary.tsx # Attack breakdown, situational toggles, rule toggles
-    ├── BurgerMenu.tsx    # Settings/roster management menu
+    ├── BattleSummary.tsx # Battle log, used for both the live battle and archived ones
+    ├── BurgerMenu.tsx    # The only chrome: phase advancement, roster management, settings
+    ├── HomePage.tsx      # Landing screen: pick armies, commence, past battles
     ├── KeywordPicker.tsx # Searchable keyword multi-select, sourced from the loaded armies
     ├── ProfilePanel.tsx  # Collapsible unit profiles: stats, wounds +/-, battle-shock, abilities
     ├── RosterUpload.tsx  # File upload UI for BattleScribe JSON
     ├── RulesPage.tsx     # Homebrew rules, keyword attachments, rule library
+    ├── Stepper.tsx       # Shared touch-sized number input (+/- plus keyboard)
     ├── UnitPicker.tsx    # Unit selection dropdown (shows skull for dead units)
-    ├── WeaponSelector.tsx # Weapon selection for the attacking unit
+    ├── WeaponSelector.tsx # Weapon selection, with a used-this-round indicator
     └── WoundInput.tsx   # Wound input + model removal recommendations + attack confirmation
 ```
 
 ## Screen Layout
 
+There are four screens, switched by a `view` state in `app.tsx` — there is no router:
+`home` | `combat` | `rules` | `summary`.
+
+**Home** is the landing screen: two army slots, a Commence button, and the list of past
+battles. Starting a battle is explicit rather than implicit in having two rosters loaded, so
+the round counter never starts ticking before the game does. A battle already under way is
+resumed straight into `combat` on load, since that is what you want after the phone locks
+mid-game.
+
+Battles are archived in exactly one place — `archiveActiveBattle`, called whenever a battle
+leaves the active slot (commence, reset, roster replaced, armies cleared). That means a battle
+can never be archived twice, and an empty one is never archived at all
+(`hasRecordedActions`). `BattleSummary` renders a live and an archived battle identically.
+
 The combat screen is deliberately split:
 
+- A **sticky header** holds the round/phase readout and the burger menu, so both stay in
+  reach while the combat readout scrolls. The burger owns everything that is not resolving
+  the current attack, including **Next Phase** and the jump-back phase list. Its rows are
+  full-bleed, 48px, and divided rather than spaced, so it reads as a list.
 - **Attacker | swap | Defender** bar, then the **collapsible profile panel**. The panel owns
   everything that is not part of resolving the current attack: full stat lines, models and
   wounds remaining (a single +/- total — only one model in a unit can be damaged at a time),
@@ -62,6 +84,22 @@ The combat screen is deliberately split:
 - **Combat area** below it shows only what changes a number in this attack. A rule that just
   prints a reminder never gets a toggle here; re-rolls, modifiers and crit changes do. Options
   such as battle-shock are fed in from the profile panel instead of being duplicated as toggles.
+
+## Mobile Conventions
+
+The app is used one-handed on a phone at a table, so:
+
+- Every count is a `Stepper`: +/- buttons either side of a read-only value. The value is not
+  typeable on purpose — the counts entered at the table are small, so +/- is always faster than
+  raising the keyboard over the readout. Do not add a bare `<input type="number">` for a count.
+- Interactive controls are at least 36px in the smallest dimension (`h-9`/`min-h-9`), and 44px
+  (`h-11`) for anything full-width or destructive.
+- `index.css` carries the touch baseline: no tap highlight, no double-tap zoom delay, no
+  number-input spinners, and `pt-safe`/`pb-safe` for notch and home-bar clearance.
+- Weapons a unit has already attacked with this round are badged in `WeaponSelector`. The
+  count comes from `weaponUsage(state, unitId)`, derived from the battle log rather than
+  stored, so it survives jumping between phases and resets with the round. It is an indicator
+  only — a unit can legitimately shoot and then fight in the same round.
 
 ## Rules Engine
 

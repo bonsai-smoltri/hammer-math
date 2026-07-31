@@ -16,6 +16,7 @@ import {
   splitBracketed,
 } from '../lib/combat-math'
 import { affectsCombat } from '../lib/rules/engine'
+import { Stepper } from './Stepper'
 
 interface Props {
   attacker: ParsedUnit
@@ -119,31 +120,19 @@ export function AttackSummary({
         </h2>
 
         {/* Weapons firing */}
-        <div class="flex items-center gap-2 text-xs">
-          <label for="weapon-count" class="opacity-70">
-            {weapon.name} ×
-          </label>
-          <input
-            id="weapon-count"
-            type="number"
-            min={0}
-            class="input input-bordered input-xs w-16 text-center"
-            value={weaponCount}
-            onInput={(e) => {
-              const value = parseInt((e.target as HTMLInputElement).value, 10)
-              setWeaponCountOverride(Number.isNaN(value) ? null : Math.max(0, value))
-            }}
-          />
-          {weaponCountOverride !== null && weaponCountOverride !== fallbackCount && (
-            <button
-              class="btn btn-ghost btn-xs"
-              onClick={() => setWeaponCountOverride(null)}
-              aria-label="Reset weapon count to the roster value"
-            >
-              reset to {fallbackCount}
-            </button>
-          )}
-        </div>
+        <Stepper
+          label="Weapons firing"
+          hint={weapon.name}
+          value={weaponCount}
+          min={0}
+          onChange={(value) => setWeaponCountOverride(value)}
+          onReset={
+            weaponCountOverride !== null && weaponCountOverride !== fallbackCount
+              ? () => setWeaponCountOverride(null)
+              : undefined
+          }
+          resetLabel={`reset to ${fallbackCount}`}
+        />
 
         {/* Situational toggles */}
         {optionDefs.length > 0 && (
@@ -261,7 +250,7 @@ function ToggleButton({
   return (
     <button
       type="button"
-      class={`btn btn-xs ${active ? activeClass : 'btn-ghost border border-base-content/20'}`}
+      class={`btn btn-sm h-10 ${active ? activeClass : 'btn-ghost border border-base-content/20'}`}
       onClick={onClick}
       title={title}
       aria-pressed={active}

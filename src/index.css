@@ -1,2 +1,48 @@
 @import "tailwindcss";
 @plugin "daisyui";
+
+@layer base {
+  html {
+    /* Stops iOS resizing text when the phone is turned sideways. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    /* No grey flash box on every tap. */
+    -webkit-tap-highlight-color: transparent;
+    /* Keeps pull-to-refresh from firing while scrolling the combat readout. */
+    overscroll-behavior-y: contain;
+  }
+
+  button,
+  label,
+  input,
+  select,
+  summary {
+    /* Drops the 300ms delay browsers add while waiting for a double-tap zoom. */
+    touch-action: manipulation;
+  }
+
+  /* Spinner arrows are unusable with a thumb and redundant next to a stepper. */
+  input[type="number"] {
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}
+
+@layer utilities {
+  /* Keeps content clear of the notch and the home-bar gesture area. */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .pb-safe {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem);
+  }
+}

@@ -67,3 +67,23 @@ export interface BattleState {
   unitWounds: Record<string, UnitWoundState>  // keyed by unit ID
   battleComplete: boolean
 }
+
+/**
+ * A finished battle, kept so it can be reviewed from the home screen.
+ *
+ * The whole BattleState is stored rather than a digest, so a past battle opens
+ * in the same summary view as a live one. Rosters are not stored: the log
+ * already carries the unit names it needs to read back.
+ */
+export interface BattleRecord {
+  id: string
+  /** When the battle was archived, not when it started. */
+  savedAt: number
+  armyAName: string
+  armyBName: string
+  /** Rounds actually reached. */
+  roundsPlayed: number
+  /** True when it ran to the end of the last round rather than being abandoned. */
+  completed: boolean
+  state: BattleState
+}

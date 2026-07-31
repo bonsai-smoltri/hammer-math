@@ -5,6 +5,7 @@ import type { KeywordAttachment, RuleDefinition } from '../types/rules'
 import { maxWounds, totalWoundsRemaining } from '../lib/battle-state'
 import { resolveUnitAbilities } from '../lib/rules/engine'
 import { BATTLE_SHOCK_EFFECTS } from '../lib/rules/library'
+import { Stepper } from './Stepper'
 
 interface Props {
   attacker: ParsedUnit | null
@@ -43,7 +44,7 @@ export function ProfilePanel({
   return (
     <div class="border-b border-base-content/10 bg-base-200/50">
       <button
-        class="w-full flex items-center justify-between px-4 py-2 text-xs"
+        class="w-full flex items-center justify-between px-4 py-3 min-h-11 text-xs"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         aria-controls="profile-panel-body"
@@ -160,37 +161,21 @@ function UnitCard({
 
         {/* Models and wounds */}
         {wounds && (
-          <div class="flex items-center justify-between gap-2 border-t border-base-content/10 pt-2">
-            <div class="text-xs">
-              <div>
-                {models}/{wounds.startingModelCount} model{wounds.startingModelCount === 1 ? '' : 's'}
-              </div>
+          <div class="border-t border-base-content/10 pt-2 space-y-1">
+            <Stepper
+              label="Wounds"
+              value={current}
+              min={0}
+              max={max}
+              display={`${current}/${max}W`}
+              onChange={(total) => onSetWounds(unit.id, total)}
+            />
+            <div class="text-xs opacity-60">
+              {models}/{wounds.startingModelCount} model
+              {wounds.startingModelCount === 1 ? '' : 's'}
               {damagedModel !== null && (
-                <div class="opacity-60">
-                  damaged model on {damagedModel}/{wounds.woundsPerModel}W
-                </div>
+                <> — damaged model on {damagedModel}/{wounds.woundsPerModel}W</>
               )}
-            </div>
-            <div class="flex items-center gap-1">
-              <button
-                class="btn btn-xs btn-circle btn-ghost"
-                onClick={() => onSetWounds(unit.id, current - 1)}
-                disabled={current <= 0}
-                aria-label={`Remove a wound from ${unit.name}`}
-              >
-                −
-              </button>
-              <span class="text-sm font-mono w-16 text-center" aria-live="polite">
-                {current}/{max}W
-              </span>
-              <button
-                class="btn btn-xs btn-circle btn-ghost"
-                onClick={() => onSetWounds(unit.id, current + 1)}
-                disabled={current >= max}
-                aria-label={`Restore a wound to ${unit.name}`}
-              >
-                +
-              </button>
             </div>
           </div>
         )}
@@ -198,11 +183,11 @@ function UnitCard({
         {/* Battle-shock */}
         {wounds && (
           <div class="border-t border-base-content/10 pt-2">
-            <label class="flex items-center justify-between gap-2 cursor-pointer">
-              <span class="text-xs">Battle-shocked</span>
+            <label class="flex items-center justify-between gap-2 cursor-pointer min-h-11">
+              <span class="text-sm">Battle-shocked</span>
               <input
                 type="checkbox"
-                class="toggle toggle-xs toggle-warning"
+                class="toggle toggle-warning"
                 checked={wounds.battleShocked}
                 onChange={(e) =>
                   onSetBattleShocked(unit.id, (e.target as HTMLInputElement).checked)
@@ -238,7 +223,7 @@ function UnitCard({
         {(unit.abilities.length > 0 || summary.rules.length > 0) && (
           <div class="border-t border-base-content/10 pt-2">
             <button
-              class="text-xs opacity-70 flex items-center gap-1"
+              class="text-sm opacity-70 flex items-center gap-1 min-h-11 w-full"
               onClick={() => setShowAbilities(!showAbilities)}
               aria-expanded={showAbilities}
             >

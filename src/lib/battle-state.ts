@@ -7,6 +7,7 @@ import type {
   HealAction,
   UnitWoundState,
   CombatPhase,
+  PlayerTurn,
 } from '../types/battle'
 
 export const MAX_ROUNDS = 5
@@ -220,6 +221,66 @@ export function applyAttack(
 /** Total wounds remaining across the unit. */
 export function totalWoundsRemaining(unitState: UnitWoundState): number {
   return unitState.woundsRemaining.reduce((sum, w) => sum + w, 0)
+}
+
+/**
+ * How many times a unit has already attacked with each of its weapons in a
+ * round, keyed by weapon name.
+ *
+ * Derived from the battle log rather than tracked separately, so it stays honest
+ * when the user jumps back to an earlier phase, and resets on its own when the
+ * round advances. This is an indicator only — nothing stops a weapon being used
+ * again, since a unit can legitimately shoot and then fight in the same round.
+ */
+export function weaponUsage(
+  state: BattleState,
+  unitId: string,
+  round: number = state.currentRound
+): Record<string, number> {
+  const usage: Record<string, number> = {}
+  const entry = state.rounds.find((r) => r.number === round)
+  for (const action of entry?.actions ?? []) {
+    if (action.type !== 'attack' || action.attackerUnitId !== unitId) continue
+    usage[action.weaponName] = (usage[action.weaponName] ?? 0) + 1
+  }
+  return usage
+}
+
+/** One entry in the battle's phase order. */
+export interface PhaseStep {
+  round: number
+  turn: PlayerTurn
+  phase: CombatPhase
+  label: string
+  isCurrent: boolean
+}
+
+const PHASE_ORDER: [PlayerTurn, CombatPhase][] = [
+  ['attacker', 'shooting'],
+  ['attacker', 'fight'],
+  ['defender', 'shooting'],
+  ['defender', 'fight'],
+]
+
+/**
+ * Every phase from the start of the battle up to and including the current one,
+ * for the jump-back list.
+ */
+export function phaseHistory(state: BattleState): PhaseStep[] {
+  const steps: PhaseStep[] = []
+
+  for (let round = 1; round <= state.currentRound; round++) {
+    for (const [turn, phase] of PHASE_ORDER) {
+      const isCurrent =
+        round === state.currentRound &&
+        turn === state.currentTurn &&
+        phase === state.currentPhase
+      steps.push({ round, turn, phase, label: `R${round} ${turn} ${phase}`, isCurrent })
+      if (isCurrent) return steps
+    }
+  }
+
+  return steps
 }
 
 /** Maximum wounds the unit can have (starting strength × wounds per model). */

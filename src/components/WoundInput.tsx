@@ -8,6 +8,7 @@ import {
   isFixedDamage,
   parseDamageValue,
 } from '../lib/battle-state'
+import { Stepper } from './Stepper'
 
 interface WoundInputProps {
   weapon: ParsedWeapon
@@ -85,23 +86,19 @@ export function WoundInput({ weapon, defenderWoundState, onConfirm }: WoundInput
           <div class="text-xs opacity-60 mb-1">
             Damage rolled <span class="opacity-70">({weapon.damage} each)</span>
           </div>
-          <div class="flex flex-wrap gap-1">
+          <div class="flex flex-wrap gap-2">
             {rolls.map((roll, i) => (
-              <input
+              <Stepper
                 key={i}
-                type="number"
-                min={1}
-                class="input input-bordered input-xs w-12 text-center"
+                compact
+                label={`Damage for failed save ${i + 1}`}
                 value={roll}
-                aria-label={`Damage for failed save ${i + 1}`}
-                onInput={(e) => {
-                  const value = parseInt((e.target as HTMLInputElement).value, 10)
+                min={1}
+                onChange={(value) =>
                   setRolls((prev) =>
-                    prev.map((existing, index) =>
-                      index === i ? (Number.isNaN(value) ? 0 : Math.max(0, value)) : existing
-                    )
+                    prev.map((existing, index) => (index === i ? value : existing))
                   )
-                }}
+                }
               />
             ))}
           </div>
@@ -165,62 +162,12 @@ export function WoundInput({ weapon, defenderWoundState, onConfirm }: WoundInput
       )}
 
       <button
-        class="btn btn-primary btn-block"
+        class="btn btn-primary btn-block h-12 text-base"
         disabled={!hasInput || !damageResult}
         onClick={handleConfirm}
       >
         ⚔️ Confirm Attack
       </button>
-    </div>
-  )
-}
-
-function Stepper({
-  label,
-  hint,
-  value,
-  onChange,
-}: {
-  label: string
-  hint?: string
-  value: number
-  onChange: (value: number) => void
-}) {
-  const id = `stepper-${label.replace(/\s+/g, '-').toLowerCase()}`
-  return (
-    <div class="flex items-center gap-3">
-      <label class="text-sm flex-1" for={id}>
-        {label}
-        {hint && <span class="text-xs opacity-70"> ({hint})</span>}
-      </label>
-      <div class="flex items-center gap-1">
-        <button
-          class="btn btn-sm btn-circle btn-ghost"
-          onClick={() => onChange(value - 1)}
-          disabled={value <= 0}
-          aria-label={`Decrease ${label}`}
-        >
-          −
-        </button>
-        <input
-          id={id}
-          type="number"
-          class="input input-sm input-bordered w-16 text-center"
-          value={value}
-          min={0}
-          onInput={(e) => {
-            const parsed = parseInt((e.target as HTMLInputElement).value, 10)
-            onChange(Number.isNaN(parsed) ? 0 : parsed)
-          }}
-        />
-        <button
-          class="btn btn-sm btn-circle btn-ghost"
-          onClick={() => onChange(value + 1)}
-          aria-label={`Increase ${label}`}
-        >
-          +
-        </button>
-      </div>
     </div>
   )
 }

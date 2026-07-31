@@ -1,16 +1,23 @@
 import { useState, useEffect, useMemo } from 'preact/hooks'
-import { RosterUpload } from './components/RosterUpload'
 import { BurgerMenu } from './components/BurgerMenu'
+import { HomePage } from './components/HomePage'
 import { UnitPicker } from './components/UnitPicker'
 import { WeaponSelector } from './components/WeaponSelector'
 import { AttackSummary } from './components/AttackSummary'
 import { ProfilePanel } from './components/ProfilePanel'
-import { PhaseNavigator } from './components/PhaseNavigator'
 import { BattleSummary } from './components/BattleSummary'
 import { WoundInput } from './components/WoundInput'
 import { parseRoster } from './lib/roster-parser'
 import { RulesPage } from './components/RulesPage'
 import { saveRoster, loadRoster, clearRosters, saveGameState, loadGameState, clearGameState } from './lib/storage'
+import {
+  addBattleRecord,
+  hasRecordedActions,
+  loadBattleHistory,
+  removeBattleRecord,
+  saveBattleHistory,
+  toBattleRecord,
+} from './lib/battle-history'
 import { emptyPayload, loadRulesPayload, saveRulesPayload, type RulesPayload } from './lib/rules-storage'
 import {
   createBattleState,
@@ -19,12 +26,16 @@ import {
   applyAttack,
   setBattleShocked,
   setUnitWounds,
+  weaponUsage,
 } from './lib/battle-state'
 import { estimateWounds } from './lib/combat-math'
 import type { ParsedAttachment, ParsedRoster, ParsedUnit, ParsedWeapon } from './types/roster'
-import type { BattleState } from './types/battle'
+import type { BattleRecord, BattleState } from './types/battle'
 import type { KeywordAttachment } from './types/rules'
 import type { DamageResult } from './lib/battle-state'
+
+/** Which screen is showing. There is no router: the app is four screens deep. */
+type View = 'home' | 'combat' | 'rules' | 'summary'
 
 export function App() {
   const [armyA, setArmyA] = useState<ParsedRoster | null>(null)
@@ -35,8 +46,10 @@ export function App() {
   const [picking, setPicking] = useState<'attacker' | 'defender' | null>(null)
   const [battleState, setBattleState] = useState<BattleState | null>(null)
   const [swapped, setSwapped] = useState(false)
-  const [showSummary, setShowSummary] = useState(false)
-  const [showRules, setShowRules] = useState(false)
+  const [view, setView] = useState<View>('home')
+  /** Set when reading back a past battle rather than the live one. */
+  const [viewingRecord, setViewingRecord] = useState<BattleRecord | null>(null)
+  const [history, setHistory] = useState<BattleRecord[]>([])
   const [rulesPayload, setRulesPayload] = useState<RulesPayload>(emptyPayload())
   const [rosterErrors, setRosterErrors] = useState<{ A: string | null; B: string | null }>({
     A: null,
@@ -52,11 +65,17 @@ export function App() {
 
     // Load custom rules and keyword attachments
     setRulesPayload(loadRulesPayload())
+    setHistory(loadBattleHistory())
 
     // Restore game state
     const savedGame = loadGameState()
     if (savedGame && storedA && storedB) {
-      if (savedGame.battleState) setBattleState(savedGame.battleState)
+      if (savedGame.battleState) {
+        setBattleState(savedGame.battleState)
+        // A battle already under way is what you want on screen after the phone
+        // locks mid-game, so skip the home screen in that case.
+        setView('combat')
+      }
       setSwapped(savedGame.swapped ?? false)
 
       const allUnits = [...storedA.units, ...storedB.units]
@@ -79,13 +98,6 @@ export function App() {
     }
   }, [])
 
-  // Initialize battle state when both rosters are loaded
-  useEffect(() => {
-    if (armyA && armyB && !battleState) {
-      setBattleState(createBattleState(armyA, armyB))
-    }
-  }, [armyA, armyB])
-
   // Persist game state to localStorage on every change
   useEffect(() => {
     if (battleState || attackingUnit || defendingUnit || selectedWeapon) {
@@ -98,6 +110,31 @@ export function App() {
       })
     }
   }, [battleState, attackingUnit, defendingUnit, selectedWeapon, swapped])
+
+  /**
+   * Files the battle in progress under past battles, if anything happened in it.
+   * Called whenever a battle leaves the active slot, so it is the only place
+   * history is written and a battle can never be archived twice.
+   */
+  const archiveActiveBattle = (state: BattleState | null, aName?: string, bName?: string) => {
+    if (!state || !hasRecordedActions(state)) return
+    const record = toBattleRecord(
+      state,
+      aName ?? armyA?.name ?? 'Army A',
+      bName ?? armyB?.name ?? 'Army B'
+    )
+    const next = addBattleRecord(history, record)
+    setHistory(next)
+    saveBattleHistory(next)
+  }
+
+  const clearSelections = () => {
+    setAttackingUnit(null)
+    setDefendingUnit(null)
+    setSelectedWeapon(null)
+    setPicking(null)
+    setSwapped(false)
+  }
 
   const handleRosterUpload = (file: File, army: 'A' | 'B') => {
     const reader = new FileReader()
@@ -116,17 +153,14 @@ export function App() {
         }
         setRosterErrors((prev) => ({ ...prev, [army]: null }))
         saveRoster(army, parsed)
-        if (army === 'A') {
-          setArmyA(parsed)
-          setAttackingUnit(null)
-          setSelectedWeapon(null)
-        } else {
-          setArmyB(parsed)
-          setDefendingUnit(null)
-        }
-        // Reset battle state when rosters change
+        // Changing an army ends the battle it was fighting.
+        archiveActiveBattle(battleState)
+        if (army === 'A') setArmyA(parsed)
+        else setArmyB(parsed)
+        clearSelections()
         clearGameState()
         setBattleState(null)
+        setView('home')
       } catch (err) {
         console.error('Failed to parse roster:', err)
         setRosterErrors((prev) => ({
@@ -139,27 +173,43 @@ export function App() {
   }
 
   const handleClear = () => {
+    archiveActiveBattle(battleState)
     clearRosters()
     clearGameState()
     setArmyA(null)
     setArmyB(null)
-    setAttackingUnit(null)
-    setDefendingUnit(null)
-    setSelectedWeapon(null)
+    clearSelections()
     setBattleState(null)
+    setView('home')
+  }
+
+  /** Starts a fresh battle with the loaded armies, filing away any current one. */
+  const handleCommence = () => {
+    if (!armyA || !armyB) return
+    archiveActiveBattle(battleState)
+    clearGameState()
+    clearSelections()
+    setBattleState(createBattleState(armyA, armyB))
+    setView('combat')
   }
 
   const handleResetGame = () => {
+    archiveActiveBattle(battleState)
     clearGameState()
-    setAttackingUnit(null)
-    setDefendingUnit(null)
-    setSelectedWeapon(null)
-    setSwapped(false)
+    clearSelections()
     if (armyA && armyB) {
       setBattleState(createBattleState(armyA, armyB))
+      setView('combat')
     } else {
       setBattleState(null)
+      setView('home')
     }
+  }
+
+  const handleDeleteRecord = (id: string) => {
+    const next = removeBattleRecord(history, id)
+    setHistory(next)
+    saveBattleHistory(next)
   }
 
   const handleSaveRules = (payload: RulesPayload) => {
@@ -186,7 +236,8 @@ export function App() {
       }
       setSwapped(false)
       if (newState.battleComplete) {
-        setShowSummary(true)
+        setViewingRecord(null)
+        setView('summary')
       }
     }
   }
@@ -256,6 +307,13 @@ export function App() {
     ? battleState.unitWounds[attackingUnit.id] ?? null
     : null
 
+  /** Weapons this unit has already attacked with this round — an indicator only. */
+  const attackerWeaponUsage = useMemo(
+    () =>
+      battleState && attackingUnit ? weaponUsage(battleState, attackingUnit.id) : undefined,
+    [battleState, attackingUnit]
+  )
+
   const defenderWoundState = battleState && defendingUnit
     ? battleState.unitWounds[defendingUnit.id] ?? null
     : null
@@ -314,12 +372,12 @@ export function App() {
   })()
 
   // Show rules page
-  if (showRules) {
+  if (view === 'rules') {
     return (
       <RulesPage
         payload={rulesPayload}
         onChange={handleSaveRules}
-        onBack={() => setShowRules(false)}
+        onBack={() => setView(battleState ? 'combat' : 'home')}
         units={allUnits}
         rosterAttachments={rosterAttachments}
         suggestions={attachmentSuggestions}
@@ -327,197 +385,203 @@ export function App() {
     )
   }
 
-  // Show battle summary
-  if (showSummary && battleState) {
+  // Battle log — either the live battle or one read back from history
+  if (view === 'summary') {
+    const shown = viewingRecord?.state ?? battleState
+    if (shown) {
+      return (
+        <BattleSummary
+          battleState={shown}
+          onDismiss={() => {
+            const cameFromHistory = viewingRecord !== null
+            setViewingRecord(null)
+            setView(cameFromHistory || !battleState ? 'home' : 'combat')
+          }}
+        />
+      )
+    }
+  }
+
+  if (view === 'home' || !bothLoaded || !battleState) {
     return (
-      <BattleSummary
-        battleState={battleState}
-        onDismiss={() => setShowSummary(false)}
+      <HomePage
+        armyA={armyA}
+        armyB={armyB}
+        errors={rosterErrors}
+        onUpload={handleRosterUpload}
+        activeBattle={battleState}
+        history={history}
+        onCommence={handleCommence}
+        onResume={() => setView('combat')}
+        onViewRecord={(record) => {
+          setViewingRecord(record)
+          setView('summary')
+        }}
+        onDeleteRecord={handleDeleteRecord}
+        onOpenRules={() => setView('rules')}
       />
     )
   }
 
   return (
     <div class="min-h-screen bg-base-100 text-base-content flex flex-col max-w-lg mx-auto">
-      {/* Upload view */}
-      {!bothLoaded && (
-        <div class="p-4">
-          <h1 class="text-xl font-bold text-center mb-6">W40k Combat Math</h1>
-          <RosterUpload
-            onUpload={handleRosterUpload}
+      {/* Sticky header: round/phase + the one menu, always in reach */}
+      <div class="sticky top-0 z-40 bg-base-200/95 backdrop-blur border-b border-base-content/10 pt-safe">
+        <div class="flex items-center justify-between gap-2 px-3 py-1">
+          <div class="text-sm font-medium min-w-0">
+            {battleState.battleComplete ? (
+              <span class="text-success">Battle complete</span>
+            ) : (
+              <>
+                <span class="opacity-60">R{battleState.currentRound}</span>{' '}
+                <span class="capitalize">{battleState.currentTurn}</span>{' '}
+                <span class="capitalize">{battleState.currentPhase}</span>
+              </>
+            )}
+          </div>
+          <BurgerMenu
             armyA={armyA}
             armyB={armyB}
-            errors={rosterErrors}
+            battleState={battleState}
+            onReplace={handleRosterUpload}
+            onGoHome={() => setView('home')}
+            onClear={handleClear}
+            onResetGame={handleResetGame}
+            onOpenRules={() => setView('rules')}
+            onAdvancePhase={handleAdvancePhase}
+            onJumpToPhase={(round, turn, phase) => {
+              setBattleState(jumpToPhase(battleState, round, turn, phase))
+              clearSelections()
+            }}
+            onViewSummary={() => {
+              setViewingRecord(null)
+              setView('summary')
+            }}
           />
         </div>
+      </div>
+
+      {/* Attacker | swap | Defender */}
+      <div class="flex items-center border-b border-base-content/10">
+        <button
+          class={`flex-1 min-w-0 py-3 px-2 text-center text-sm font-medium transition-colors ${
+            picking === 'attacker' ? 'bg-primary text-primary-content' : 'hover:bg-base-200'
+          }`}
+          onClick={() => setPicking(picking === 'attacker' ? null : 'attacker')}
+        >
+          <div class="text-xs opacity-60">Attacker</div>
+          <div class="truncate">{attackingUnit?.name ?? '—'}</div>
+        </button>
+
+        <button
+          class="btn btn-ghost h-11 w-11 min-h-11 p-0 self-center shrink-0"
+          onClick={handleSwap}
+          aria-label="Swap attacker and defender"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+          </svg>
+        </button>
+
+        <button
+          class={`flex-1 min-w-0 py-3 px-2 text-center text-sm font-medium transition-colors ${
+            picking === 'defender' ? 'bg-secondary text-secondary-content' : 'hover:bg-base-200'
+          }`}
+          onClick={() => setPicking(picking === 'defender' ? null : 'defender')}
+        >
+          <div class="text-xs opacity-60">Defender</div>
+          <div class="truncate">{defendingUnit?.name ?? '—'}</div>
+        </button>
+      </div>
+
+      {/* Collapsible profiles: stats, wounds, battle-shock, battlefield abilities */}
+      {!picking && (
+        <ProfilePanel
+          attacker={attackingUnit}
+          defender={defendingUnit}
+          attackerWounds={attackerWoundState}
+          defenderWounds={defenderWoundState}
+          rules={rulesPayload.rules}
+          attachments={attachments}
+          allUnits={allUnits}
+          onSetWounds={(unitId, total) => setBattleState(setUnitWounds(battleState, unitId, total))}
+          onSetBattleShocked={(unitId, value) =>
+            setBattleState(setBattleShocked(battleState, unitId, value))
+          }
+        />
       )}
 
-      {/* Combat view */}
-      {bothLoaded && (
-        <>
-          {/* Round/Phase indicator */}
-          {battleState && (
-            <div class="flex items-center justify-between px-4 py-2 bg-base-200 border-b border-base-content/10">
-              <div class="text-sm font-medium">
-                Round {battleState.currentRound} — <span class="capitalize">{battleState.currentTurn}</span> <span class="capitalize">{battleState.currentPhase}</span> Phase
-              </div>
-              <PhaseNavigator
-                battleState={battleState}
-                onAdvance={handleAdvancePhase}
-                onJumpTo={(round, turn, phase) => {
-                  if (!battleState) return
-                  setBattleState(jumpToPhase(battleState, round, turn, phase))
-                  setAttackingUnit(null)
-                  setDefendingUnit(null)
-                  setSelectedWeapon(null)
-                  setSwapped(false)
-                }}
-                onViewSummary={() => setShowSummary(true)}
-              />
-            </div>
+      {/* Unit picker dropdown */}
+      {picking === 'attacker' && (
+        <UnitPicker
+          roster={attackingRoster!}
+          onSelect={(unit) => {
+            setAttackingUnit(unit)
+            setSelectedWeapon(null)
+            setPicking(null)
+          }}
+          unitWounds={battleState.unitWounds}
+        />
+      )}
+      {picking === 'defender' && (
+        <UnitPicker
+          roster={defendingRoster!}
+          onSelect={(unit) => {
+            setDefendingUnit(unit)
+            setPicking(null)
+          }}
+          unitWounds={battleState.unitWounds}
+          recommendedUnitId={recommendedTargetId}
+        />
+      )}
+
+      {/* Main content */}
+      {!picking && (
+        <div class="p-4 pb-safe space-y-4 flex-1">
+          {attackingUnit && (
+            <WeaponSelector
+              unit={attackingUnit}
+              selected={selectedWeapon}
+              onSelect={setSelectedWeapon}
+              usage={attackerWeaponUsage}
+            />
           )}
 
-          {/* Top bar: Attacker | Swap | Defender | Menu */}
-          <div class="flex items-center border-b border-base-content/10">
-            <button
-              class={`flex-1 min-w-0 py-3 px-2 text-center text-sm font-medium transition-colors ${
-                picking === 'attacker'
-                  ? 'bg-primary text-primary-content'
-                  : 'hover:bg-base-200'
-              }`}
-              onClick={() => setPicking(picking === 'attacker' ? null : 'attacker')}
-            >
-              <div class="text-xs opacity-60">Attacker</div>
-              <div class="truncate">{attackingUnit?.name ?? '—'}</div>
-            </button>
-
-            {/* Swap button */}
-            <button
-              class="btn btn-ghost btn-sm px-1 self-center"
-              onClick={handleSwap}
-              aria-label="Swap attacker and defender"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
-              </svg>
-            </button>
-
-            <button
-              class={`flex-1 min-w-0 py-3 px-2 text-center text-sm font-medium transition-colors ${
-                picking === 'defender'
-                  ? 'bg-secondary text-secondary-content'
-                  : 'hover:bg-base-200'
-              }`}
-              onClick={() => setPicking(picking === 'defender' ? null : 'defender')}
-            >
-              <div class="text-xs opacity-60">Defender</div>
-              <div class="truncate">{defendingUnit?.name ?? '—'}</div>
-            </button>
-            <BurgerMenu
-              armyA={armyA}
-              armyB={armyB}
-              onReplace={handleRosterUpload}
-              onClear={handleClear}
-              onResetGame={handleResetGame}
-              onOpenRules={() => setShowRules(true)}
-            />
-          </div>
-
-          {/* Collapsible profiles: stats, wounds, battle-shock, battlefield abilities */}
-          {!picking && (
-            <ProfilePanel
-              attacker={attackingUnit}
-              defender={defendingUnit}
-              attackerWounds={attackerWoundState}
-              defenderWounds={defenderWoundState}
+          {selectedWeapon && effectiveDefender && effectiveAttacker && (
+            <AttackSummary
+              attacker={effectiveAttacker}
+              weapon={selectedWeapon}
+              defender={effectiveDefender}
               rules={rulesPayload.rules}
               attachments={attachments}
+              pinnedRuleIds={rulesPayload.pinnedRuleIds}
               allUnits={allUnits}
-              onSetWounds={(unitId, total) => {
-                if (battleState) setBattleState(setUnitWounds(battleState, unitId, total))
-              }}
-              onSetBattleShocked={(unitId, value) => {
-                if (battleState) setBattleState(setBattleShocked(battleState, unitId, value))
-              }}
+              baseOptions={baseOptions}
+              defaultWeaponCount={defaultWeaponCount}
             />
           )}
 
-          {/* Unit picker dropdown */}
-          {picking === 'attacker' && (
-            <UnitPicker
-              roster={attackingRoster!}
-              onSelect={(unit) => {
-                setAttackingUnit(unit)
-                setSelectedWeapon(null)
-                setPicking(null)
-              }}
-              unitWounds={battleState?.unitWounds}
-            />
-          )}
-          {picking === 'defender' && (
-            <UnitPicker
-              roster={defendingRoster!}
-              onSelect={(unit) => {
-                setDefendingUnit(unit)
-                setPicking(null)
-              }}
-              unitWounds={battleState?.unitWounds}
-              recommendedUnitId={recommendedTargetId}
+          {selectedWeapon && defendingUnit && effectiveAttacker && defenderWoundState && !defenderWoundState.isDead && (
+            <WoundInput
+              weapon={selectedWeapon}
+              defenderWoundState={defenderWoundState}
+              onConfirm={handleAttackConfirm}
             />
           )}
 
-          {/* Main content */}
-          {!picking && (
-            <div class="p-4 space-y-4 flex-1">
-              {/* Weapon selector */}
-              {attackingUnit && (
-                <WeaponSelector
-                  unit={attackingUnit}
-                  selected={selectedWeapon}
-                  onSelect={setSelectedWeapon}
-                />
-              )}
-
-              {/* Attack summary */}
-              {selectedWeapon && effectiveDefender && effectiveAttacker && (
-                <AttackSummary
-                  attacker={effectiveAttacker}
-                  weapon={selectedWeapon}
-                  defender={effectiveDefender}
-                  rules={rulesPayload.rules}
-                  attachments={attachments}
-                  pinnedRuleIds={rulesPayload.pinnedRuleIds}
-                  allUnits={allUnits}
-                  baseOptions={baseOptions}
-                  defaultWeaponCount={defaultWeaponCount}
-                />
-              )}
-
-              {/* Wound input + Attack button */}
-              {selectedWeapon && defendingUnit && effectiveAttacker && defenderWoundState && !defenderWoundState.isDead && (
-                <WoundInput
-                  weapon={selectedWeapon}
-                  defenderWoundState={defenderWoundState}
-                  onConfirm={handleAttackConfirm}
-                />
-              )}
-
-              {/* Dead defender notice */}
-              {defenderWoundState?.isDead && (
-                <div class="card bg-base-200 p-4 text-center">
-                  <span class="text-2xl">💀</span>
-                  <p class="font-bold text-error mt-1">Unit Destroyed</p>
-                </div>
-              )}
-
-              {!attackingUnit && !defendingUnit && (
-                <p class="text-center opacity-50 mt-8">
-                  Select an attacker and defender to begin
-                </p>
-              )}
+          {defenderWoundState?.isDead && (
+            <div class="card bg-base-200 p-4 text-center">
+              <span class="text-2xl">💀</span>
+              <p class="font-bold text-error mt-1">Unit Destroyed</p>
             </div>
           )}
-        </>
+
+          {!attackingUnit && !defendingUnit && (
+            <p class="text-center opacity-50 mt-8">
+              Select an attacker and defender to begin
+            </p>
+          )}
+        </div>
       )}
     </div>
   )

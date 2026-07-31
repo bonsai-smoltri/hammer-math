@@ -195,7 +195,7 @@ function parseSelection(
   const ownAbilityTexts = abilities
     .filter((a) => !isConferredWhileLeading(a.description))
     .map((a) => a.description)
-  const profileInvuln = parseStatNumber(unitProfile.InSv)
+  const profileInvuln = asSaveValue(parseStatNumber(unitProfile.InSv))
   const attachingAbility = abilities.find((a) => ATTACHING_ABILITIES.includes(normalize(a.name)))
 
   return {
@@ -456,19 +456,37 @@ export function isConferredWhileLeading(description: string): boolean {
   )
 }
 
+/**
+ * Special saves are D6 rolls, so only 2+ to 6+ can ever be made: a 1 always
+ * fails and 7+ is unrollable. Anything outside that is a misread, not a save —
+ * returning null lets the caller fall back instead of trusting a nonsense value.
+ */
+const MIN_SAVE = 2
+const MAX_SAVE = 6
+
+function asSaveValue(value: number | null): number | null {
+  if (value === null) return null
+  return value >= MIN_SAVE && value <= MAX_SAVE ? value : null
+}
+
 export function parseInvulnerableSave(abilities: string[]): number | null {
   for (const text of abilities) {
-    const match =
-      text.match(/(\d)\+\s*invulnerable save/i) ?? text.match(/invulnerable save[^.]*?(\d)\+/i)
-    if (match) return parseInt(match[1], 10)
+    const matches = [
+      text.match(/(\d+)\+\s*invulnerable save/i),
+      text.match(/invulnerable save[^.]*?(\d+)\+/i),
+    ]
+    for (const match of matches) {
+      const value = asSaveValue(match ? parseInt(match[1], 10) : null)
+      if (value !== null) return value
+    }
   }
   return null
 }
 
 export function parseFeelNoPain(abilities: string[]): number | null {
   for (const text of abilities) {
-    const match = text.match(/Feel No Pain\s*(\d)\+/i)
-    if (match) return parseInt(match[1], 10)
+    const value = asSaveValue(parseStatNumber(text.match(/Feel No Pain\s*(\d+)\+/i)?.[1]))
+    if (value !== null) return value
   }
   return null
 }
