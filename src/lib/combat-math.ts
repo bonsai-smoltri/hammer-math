@@ -23,26 +23,28 @@ export function formatAttackDice(profile: ResolvedProfile): string {
   const total = attacksPerWeapon * weaponCount
 
   if (isFixedExpression(attacksExpression)) {
-    const suffix = extraAttackDice > 0 ? ` (incl. +${extraAttackDice} extra dice per weapon)` : ''
-    return `${round(total)} dice — ${attacksPerWeapon} × ${weaponCount} weapon${weaponCount === 1 ? '' : 's'}${suffix}`
+    const detail = `${attacksPerWeapon} × ${weaponCount} weapon${weaponCount === 1 ? '' : 's'}${
+      extraAttackDice > 0 ? `, incl. +${extraAttackDice} extra dice per weapon` : ''
+    }`
+    return `${round(total)} Dice — (${detail})`
   }
 
   const base = averageDice(attacksExpression) ?? 1
   const bonus = attacksPerWeapon - base
   const expr = bonus > 0 ? `(${attacksExpression}+${round(bonus)})` : attacksExpression
-  return `${expr} × ${weaponCount} weapon${weaponCount === 1 ? '' : 's'} — about ${round(total)} dice`
+  return `${expr} × ${weaponCount} weapon${weaponCount === 1 ? '' : 's'} — (about ${round(total)} dice)`
 }
 
 export function formatHitLine(profile: ResolvedProfile): string {
   if (profile.autoHit) return 'Automatically hits'
 
   if (profile.unmodifiedHitFloor !== null) {
-    const parts = [`Unmodified ${profile.unmodifiedHitFloor}+ to hit`]
-    if (profile.hitReroll === 'none') parts.push('no hit re-rolls')
-    return parts.join(' — ')
+    const parts = [`${profile.unmodifiedHitFloor}+ Hits (unmodified)`]
+    if (profile.hitReroll === 'none') parts.push('— no hit re-rolls')
+    return parts.join(' ')
   }
 
-  const parts = [`Hitting on ${profile.hitThreshold}+`]
+  const parts = [`${profile.hitThreshold}+ Hits`]
   const detail: string[] = []
   if (profile.hitModifierSources.length > 0) {
     detail.push(`${profile.baseHitThreshold}+ base, ${profile.hitModifierSources.join(', ')}`)
@@ -55,7 +57,7 @@ export function formatHitLine(profile: ResolvedProfile): string {
 
 export function formatCritHitLine(profile: ResolvedProfile): string | null {
   const parts: string[] = []
-  if (profile.critHitOn !== 6) parts.push(`Critical hits on ${profile.critHitOn}+`)
+  if (profile.critHitOn !== 6) parts.push(`Critical Hits on ${profile.critHitOn}+`)
   if (profile.sustainedHits > 0) parts.push(`Sustained Hits ${round(profile.sustainedHits)}`)
   if (profile.lethalHits) parts.push('Lethal Hits')
   if (parts.length === 0) return null
@@ -64,7 +66,7 @@ export function formatCritHitLine(profile: ResolvedProfile): string | null {
 
 export function formatWoundLine(profile: ResolvedProfile): string {
   if (profile.autoWound) return 'Automatically wounds'
-  const parts = [`Wounding on ${profile.woundThreshold}+`]
+  const parts = [`${profile.woundThreshold}+ Wounds`]
   const detail: string[] = [`S${profile.strength} vs T${profile.toughness}`]
   if (profile.woundModifierSources.length > 0) detail.push(profile.woundModifierSources.join(', '))
   if (profile.woundReroll === 'failed') detail.push('re-roll failed wounds')
@@ -86,17 +88,17 @@ export function formatSaveLine(profile: ResolvedProfile): string {
   if (profile.effectiveSave === null) return `No save possible${ap}`
 
   if (profile.savingWith === 'invulnerable') {
-    const armour = profile.armourSave <= 6 ? `${profile.armourSave}+ armour, ` : 'armour negated, '
+    const armour = profile.armourSave <= 6 ? `${profile.armourSave}+ armour, ` : 'Armour negated, '
     return `${armour}${profile.invulnerableSave}+ invulnerable save${ap}`
   }
 
   const invuln =
     profile.invulnerableSave !== null ? ` (${profile.invulnerableSave}+ invulnerable is worse)` : ''
-  return `${profile.effectiveSave}+ save${ap}${invuln}`
+  return `${profile.effectiveSave}+ Save${ap}${invuln}`
 }
 
 export function formatDamageLine(profile: ResolvedProfile): string {
-  return `${profile.damageExpression} damage per unsaved wound (avg ${round(profile.damagePerWound)})`
+  return `${profile.damageExpression} damage / wound`
 }
 
 export function formatFeelNoPain(profile: ResolvedProfile): string | null {
@@ -118,7 +120,7 @@ export interface TextSegment {
 
 /**
  * Splits a breakdown line into rule text and the parenthesised detail behind it,
- * e.g. "Hitting on 3+ (3+ base, +1 Heavy)" → ["Hitting on 3+ ", "(3+ base, +1 Heavy)"].
+ * e.g. "3+ Hits (3+ base, +1 Heavy)" → ["3+ Hits ", "(3+ base, +1 Heavy)"].
  */
 export function splitBracketed(text: string): TextSegment[] {
   const segments: TextSegment[] = []

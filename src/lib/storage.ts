@@ -4,6 +4,7 @@ import type { BattleState } from '../types/battle'
 const STORAGE_KEY_A = 'w40k-roster-a'
 const STORAGE_KEY_B = 'w40k-roster-b'
 const STORAGE_KEY_GAME = 'w40k-game-state'
+const STORAGE_KEY_SHOW_DAMAGE_ESTIMATES = 'w40k-show-damage-estimates'
 
 export interface GameState {
   battleState: BattleState | null
@@ -63,4 +64,21 @@ export function loadGameState(): GameState | null {
 
 export function clearGameState(): void {
   localStorage.removeItem(STORAGE_KEY_GAME)
+}
+
+export function saveShowDamageEstimates(show: boolean): void {
+  try {
+    localStorage.setItem(STORAGE_KEY_SHOW_DAMAGE_ESTIMATES, String(show))
+  } catch (e) {
+    console.warn('Failed to save damage estimate preference to localStorage:', e)
+  }
+}
+
+export function loadShowDamageEstimates(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY_SHOW_DAMAGE_ESTIMATES) === 'true'
+  } catch (e) {
+    console.warn('Failed to load damage estimate preference from localStorage:', e)
+    return false
+  }
 }

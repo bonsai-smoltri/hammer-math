@@ -9,7 +9,7 @@ import { BattleSummary } from './components/BattleSummary'
 import { WoundInput } from './components/WoundInput'
 import { parseRoster } from './lib/roster-parser'
 import { RulesPage } from './components/RulesPage'
-import { saveRoster, loadRoster, clearRosters, saveGameState, loadGameState, clearGameState } from './lib/storage'
+import { saveRoster, loadRoster, clearRosters, saveGameState, loadGameState, clearGameState, loadShowDamageEstimates, saveShowDamageEstimates } from './lib/storage'
 import {
   addBattleRecord,
   hasRecordedActions,
@@ -28,7 +28,6 @@ import {
   setUnitWounds,
   weaponUsage,
 } from './lib/battle-state'
-import { estimateWounds } from './lib/combat-math'
 import type { ParsedAttachment, ParsedRoster, ParsedUnit, ParsedWeapon } from './types/roster'
 import type { BattleRecord, BattleState } from './types/battle'
 import type { KeywordAttachment } from './types/rules'
@@ -51,6 +50,7 @@ export function App() {
   const [viewingRecord, setViewingRecord] = useState<BattleRecord | null>(null)
   const [history, setHistory] = useState<BattleRecord[]>([])
   const [rulesPayload, setRulesPayload] = useState<RulesPayload>(emptyPayload())
+  const [showDamageEstimates, setShowDamageEstimates] = useState(false)
   const [rosterErrors, setRosterErrors] = useState<{ A: string | null; B: string | null }>({
     A: null,
     B: null,
@@ -66,6 +66,7 @@ export function App() {
     // Load custom rules and keyword attachments
     setRulesPayload(loadRulesPayload())
     setHistory(loadBattleHistory())
+    setShowDamageEstimates(loadShowDamageEstimates())
 
     // Restore game state
     const savedGame = loadGameState()
@@ -217,6 +218,12 @@ export function App() {
     saveRulesPayload(payload)
   }
 
+  const handleToggleDamageEstimates = () => {
+    const next = !showDamageEstimates
+    setShowDamageEstimates(next)
+    saveShowDamageEstimates(next)
+  }
+
   const handleSwap = () => {
     setSwapped(!swapped)
     setAttackingUnit(null)
@@ -345,32 +352,6 @@ export function App() {
     [attackerWoundState?.battleShocked, defenderWoundState?.battleShocked]
   )
 
-  // Recommended target: highest expected damage with the current weapon
-  const recommendedTargetId = (() => {
-    if (!effectiveAttacker || !selectedWeapon || !defendingRoster || !battleState) return null
-    let bestId: string | null = null
-    let bestDamage = 0
-    for (const unit of defendingRoster.units) {
-      if (battleState.unitWounds[unit.id]?.isDead) continue
-      const estimate = estimateWounds({
-        attacker: effectiveAttacker,
-        weapon: selectedWeapon,
-        defender: unit,
-        options: baseOptions,
-        rules: rulesPayload.rules,
-        attachments,
-        allUnits,
-        weaponCount: defaultWeaponCount,
-        availableManualRuleIds: [],
-      })
-      if (estimate > bestDamage) {
-        bestDamage = estimate
-        bestId = unit.id
-      }
-    }
-    return bestId
-  })()
-
   // Show rules page
   if (view === 'rules') {
     return (
@@ -457,6 +438,8 @@ export function App() {
               setViewingRecord(null)
               setView('summary')
             }}
+            showDamageEstimates={showDamageEstimates}
+            onToggleDamageEstimates={handleToggleDamageEstimates}
           />
         </div>
       </div>
@@ -531,7 +514,6 @@ export function App() {
             setPicking(null)
           }}
           unitWounds={battleState.unitWounds}
-          recommendedUnitId={recommendedTargetId}
         />
       )}
 
@@ -558,6 +540,7 @@ export function App() {
               allUnits={allUnits}
               baseOptions={baseOptions}
               defaultWeaponCount={defaultWeaponCount}
+              showDamageEstimates={showDamageEstimates}
             />
           )}
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatAttackDice,
+  formatDamageLine,
   formatHitLine,
   formatSaveLine,
   formatWoundLine,
@@ -41,12 +42,17 @@ describe('breakdown lines', () => {
   })
 
   it('puts the supporting detail in brackets so it can be dimmed', () => {
-    expect(formatAttackDice(resolved.profile)).toBe('10 dice — 2 × 5 weapons')
-    expect(formatHitLine(resolved.profile)).toBe('Hitting on 3+ (4+ base, +1 Heavy)')
-    expect(formatWoundLine(resolved.profile)).toBe('Wounding on 4+ (S4 vs T4)')
-    expect(formatSaveLine(resolved.profile)).toBe('3+ save')
+    expect(formatAttackDice(resolved.profile)).toBe('10 Dice — (2 × 5 weapons)')
+    expect(formatHitLine(resolved.profile)).toBe('3+ Hits (4+ base, +1 Heavy)')
+    expect(formatWoundLine(resolved.profile)).toBe('4+ Wounds (S4 vs T4)')
+    expect(formatSaveLine(resolved.profile)).toBe('3+ Save')
+    expect(formatDamageLine(resolved.profile)).toBe('1 damage / wound')
 
-    for (const line of [formatHitLine(resolved.profile), formatWoundLine(resolved.profile)]) {
+    for (const line of [
+      formatAttackDice(resolved.profile),
+      formatHitLine(resolved.profile),
+      formatWoundLine(resolved.profile),
+    ]) {
       expect(splitBracketed(line).some((segment) => segment.dim)).toBe(true)
     }
   })

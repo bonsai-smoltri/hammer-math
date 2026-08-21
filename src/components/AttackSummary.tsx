@@ -31,6 +31,8 @@ interface Props {
   baseOptions?: Partial<CombatOptions>
   /** Weapons firing, from the roster and surviving models. */
   defaultWeaponCount?: number
+  /** Whether to show the expected-damage estimate row. */
+  showDamageEstimates: boolean
 }
 
 /**
@@ -49,6 +51,7 @@ export function AttackSummary({
   pinnedRuleIds,
   baseOptions,
   defaultWeaponCount,
+  showDamageEstimates,
 }: Props) {
   const [options, setOptions] = useState<CombatOptions>(defaultCombatOptions())
   const [activeManualRuleIds, setActiveManualRuleIds] = useState<string[]>([])
@@ -116,7 +119,7 @@ export function AttackSummary({
     <div class="card bg-base-200">
       <div class="card-body p-4">
         <h2 class="card-title text-sm opacity-70">
-          {attacker.name} → {defender.name}
+          Rolls & Modifiers
         </h2>
 
         {/* Weapons firing */}
@@ -134,37 +137,30 @@ export function AttackSummary({
           resetLabel={`reset to ${fallbackCount}`}
         />
 
-        {/* Situational toggles */}
-        {optionDefs.length > 0 && (
-          <div class="flex flex-wrap gap-2 mb-1">
-            {optionDefs.map((def) => (
-              <ToggleButton
-                key={def.key}
-                label={def.label}
-                title={def.hint}
-                active={options[def.key]}
-                onClick={() => toggleOption(def.key)}
-                variant={def.key === 'targetInCover' ? 'warning' : 'primary'}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Rule toggles */}
-        {resolved.manualRules.length > 0 && (
-          <div class="flex flex-wrap gap-2 mb-1">
-            {resolved.manualRules.map((rule) => (
-              <ToggleButton
-                key={rule.id}
-                label={rule.name}
-                title={rule.description ?? rule.name}
-                active={activeManualRuleIds.includes(rule.id)}
-                onClick={() => toggleRule(rule.id)}
-                variant="accent"
-              />
-            ))}
-          </div>
-        )}
+        <div class="flex flex-wrap gap-2 mb-1">
+          {/* Situational toggles */}
+          {optionDefs.map((def) => (
+            <ToggleButton
+              key={def.key}
+              label={def.label}
+              title={def.hint}
+              active={options[def.key]}
+              onClick={() => toggleOption(def.key)}
+              variant={def.key === 'targetInCover' ? 'warning' : 'primary'}
+            />
+          ))}
+          {/* Rule toggles */}
+          {resolved.manualRules.map((rule) => (
+            <ToggleButton
+              key={rule.id}
+              label={rule.name}
+              title={rule.description ?? rule.name}
+              active={activeManualRuleIds.includes(rule.id)}
+              onClick={() => toggleRule(rule.id)}
+              variant="accent"
+            />
+          ))}
+        </div>
 
         {/* Pipeline */}
         <div class="space-y-2 font-mono text-sm">
@@ -177,16 +173,14 @@ export function AttackSummary({
           <SummaryLine icon="🔥" text={formatDamageLine(profile)} />
           <OptionalLine icon="❤️‍🩹" text={formatFeelNoPain(profile)} />
 
-          <div class="border-t border-base-content/10 pt-2 mt-2 space-y-1">
-            <SummaryLine
-              icon="📊"
-              text={`~${estimate.expectedDamage.toFixed(1)} damage, ~${estimate.expectedModelsSlain.toFixed(1)} models slain`}
-            />
-            <SummaryLine
-              icon="🧮"
-              text={`${estimate.attacks.toFixed(1)} attacks → ${estimate.hits.toFixed(1)} hits → ${estimate.wounds.toFixed(1)} wounds → ${estimate.unsavedWounds.toFixed(1)} unsaved${estimate.mortalWounds > 0 ? ` + ${estimate.mortalWounds.toFixed(1)} mortal` : ''}`}
-            />
-          </div>
+          {showDamageEstimates && (
+            <div class="border-t border-base-content/10 pt-2 mt-2 space-y-1">
+              <SummaryLine
+                icon="🧮"
+                text={`${estimate.attacks.toFixed(1)} attacks → ${estimate.hits.toFixed(1)} hits → ${estimate.wounds.toFixed(1)} wounds → ${estimate.unsavedWounds.toFixed(1)} unsaved${estimate.mortalWounds > 0 ? ` + ${estimate.mortalWounds.toFixed(1)} mortal` : ''}, ~${estimate.expectedDamage.toFixed(1)} damage`}
+              />
+            </div>
+          )}
         </div>
 
         {/* Which rules fired */}

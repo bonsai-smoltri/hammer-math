@@ -17,6 +17,8 @@ interface Props {
   onAdvancePhase: () => void
   onJumpToPhase: (round: number, turn: PlayerTurn, phase: CombatPhase) => void
   onViewSummary: () => void
+  showDamageEstimates: boolean
+  onToggleDamageEstimates: () => void
 }
 
 /**
@@ -39,6 +41,8 @@ export function BurgerMenu({
   onAdvancePhase,
   onJumpToPhase,
   onViewSummary,
+  showDamageEstimates,
+  onToggleDamageEstimates,
 }: Props) {
   const [showJump, setShowJump] = useState(false)
   const steps = battleState ? phaseHistory(battleState) : []
@@ -134,6 +138,13 @@ export function BurgerMenu({
             <span>Clear both armies</span>
           </MenuItem>
         </MenuSection>
+
+        <MenuSection>
+          <MenuItem onClick={run(onToggleDamageEstimates)} pressed={showDamageEstimates}>
+            <span>Show/Hide Damage Estimates</span>
+            <span class="text-xs opacity-60">{showDamageEstimates ? 'shown' : 'hidden'}</span>
+          </MenuItem>
+        </MenuSection>
       </div>
     </div>
   )
@@ -155,6 +166,7 @@ function MenuItem({
   emphasis = false,
   inset = false,
   expanded,
+  pressed,
   tone,
 }: {
   children: ComponentChildren
@@ -163,6 +175,7 @@ function MenuItem({
   emphasis?: boolean
   inset?: boolean
   expanded?: boolean
+  pressed?: boolean
   tone?: 'warning' | 'error'
 }) {
   const toneClass =
@@ -177,6 +190,7 @@ function MenuItem({
       onClick={onClick}
       disabled={disabled}
       aria-expanded={expanded}
+      aria-pressed={pressed}
     >
       {children}
     </button>
